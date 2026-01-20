@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS links (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   
-  UNIQUE(user_id, article_id)
+  UNIQUE(user_id, article_id),
+  UNIQUE(user_id, slug)
 );
 
 -- ============================================================================

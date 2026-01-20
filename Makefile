@@ -7,7 +7,7 @@ endif
 # Variables par défaut
 MIGRATION_PATH=./migrations
 
-.PHONY: migrate-up migrate-down migrate-create
+.PHONY: migrate-up migrate-down migrate-create migrate-force migrate-version migrate-goto reset-db
 
 # Commande pour migrer UP
 migrate-up:
