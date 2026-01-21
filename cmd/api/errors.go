@@ -82,3 +82,8 @@ func (app *application) invalidAuthenticationTokenResponse(w http.ResponseWriter
 	message := "invalid or missing authentication token"
 	app.errorResponse(w, r, http.StatusUnauthorized, message)
 }
+
+func (app *application) alreadyExistsResponse(w http.ResponseWriter, r *http.Request) {
+	message := "resource already exists"
+	app.errorResponse(w, r, http.StatusConflict, message)
+}

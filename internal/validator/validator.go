@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"net/url"
 	"regexp"
 )
 
@@ -65,4 +66,9 @@ func Unique[T comparable](values []T) bool {
 		uniqueValues[value] = true
 	}
 	return len(values) == len(uniqueValues)
+}
+
+func IsURL(str string) bool {
+	u, err := url.Parse(str)
+	return err == nil && u.Scheme != "" && u.Host != ""
 }

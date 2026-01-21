@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   -- Personnalisation
   custom_title TEXT, -- Si NULL, on affiche feeds.original_title
   custom_icon TEXT, -- Emoji ou URL d'icône
-  category TEXT, -- Optionnel: "Tech", "News", "Dev"
   
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   

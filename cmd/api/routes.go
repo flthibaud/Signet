@@ -15,8 +15,7 @@ func (app *application) routes() http.Handler {
 
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/users", app.registerUserHandler)
-	router.HandlerFunc(http.MethodPost, "/v1/feeds", app.createSubscriptionHandler)
-	// router.HandlerFunc(http.MethodGet, "/v1/links/:id", app.showLinkHandler)
+	router.HandlerFunc(http.MethodPost, "/v1/subscriptions", app.createSubscriptionHandler)
 
 	router.HandlerFunc(http.MethodPost, "/v1/tokens/authentication", app.createAuthenticationTokenHandler)
 

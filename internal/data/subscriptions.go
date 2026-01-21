@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -13,7 +14,6 @@ type Subscription struct {
 	FeedID      int64     `json:"feed_id"`
 	CustomTitle string    `json:"custom_title"`
 	CustomIcon  string    `json:"custom_icon"`
-	CategoryID  *int64    `json:"category_id,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -28,39 +28,39 @@ type SubscriptionDisplay struct {
 	FeedUrl     string `json:"feed_url"`
 }
 
-func (m SubscriptionModel) GetAllForUser(userID uuid.UUID) ([]*SubscriptionDisplay, error) {
+func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error) {
 	query := `
-		SELECT 
-				s.id, 
-				s.feed_id, 
-				COALESCE(s.custom_title, f.original_title, f.url) as display_name,
-				f.url
-		FROM subscriptions s
-		JOIN feeds f ON s.feed_id = f.id
-		WHERE s.user_id = $1
-		ORDER BY display_name ASC`
-
-	// ... (Scan des lignes et retour du slice) ...
-	rows, err := m.DB.Query(query, userID)
+		SELECT EXISTS (
+			SELECT 1 FROM subscriptions
+			WHERE user_id = $1 AND feed_id = $2
+		)`
+	var exists bool
+	err := m.DB.QueryRow(query, userID, feedID).Scan(&exists)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var subs []*SubscriptionDisplay
-
-	for rows.Next() {
-		var sub SubscriptionDisplay
-		err := rows.Scan(&sub.ID, &sub.FeedID, &sub.DisplayName, &sub.FeedUrl)
-		if err != nil {
-			return nil, err
-		}
-		subs = append(subs, &sub)
+		return false, err
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, err
+	return exists, nil
+}
+
+func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
+	query := `
+		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id`
+
+	err := m.DB.QueryRowContext(ctx,
+		query,
+		subscription.UserID,
+		subscription.FeedID,
+		subscription.CustomTitle,
+		subscription.CustomIcon,
+		time.Now(),
+	).Scan(&subscription.ID)
+
+	if err != nil {
+		return err
 	}
 
-	return subs, nil
+	return nil
 }
