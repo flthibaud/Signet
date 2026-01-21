@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS articles (
   
   -- Le contenu
   original_html TEXT, -- HTML brut (pour debug/fallback)
-  content TEXT, -- HTML épuré/nettoyé
   text_content TEXT NOT NULL, -- Texte brut pour recherche
   
   -- Recherche full-text

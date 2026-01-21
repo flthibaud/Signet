@@ -18,7 +18,6 @@ type Article struct {
 	PageType     string    `json:"page_type,omitempty"`
 	ReadingTime  float64   `json:"reading_time_minutes"`
 	OriginalHTML string    `json:"-"`
-	Content      string    `json:"content,omitempty"`
 	TextContent  string    `json:"text_content"`
 	CreatedAt    time.Time `json:"-"`
 	PublishedAt  time.Time `json:"-"`
@@ -33,7 +32,7 @@ func (m ArticleModel) GetByHash(ctx context.Context, hash string) (*Article, err
 	var article Article
 
 	query := `
-		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, content, text_content, published_at, created_at, updated_at
+		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at, updated_at
 		FROM articles
 		WHERE hash = $1`
 
@@ -47,7 +46,7 @@ func (m ArticleModel) GetByHash(ctx context.Context, hash string) (*Article, err
 		&article.ImageURL,
 		&article.PageType,
 		&article.ReadingTime,
-		&article.Content,
+		&article.OriginalHTML,
 		&article.TextContent,
 		&article.PublishedAt,
 		&article.CreatedAt,
@@ -77,7 +76,7 @@ func (m ArticleModel) GetIDByURL(ctx context.Context, url string) (int64, error)
 // 2. Insérer un article
 func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 	query := `
-		INSERT INTO articles (url, hash, title, description, author, image_url, page_type, reading_time_minutes, content, text_content, published_at, created_at)
+		INSERT INTO articles (url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id
 	`
@@ -92,7 +91,7 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 		article.ImageURL,
 		article.PageType,
 		article.ReadingTime,
-		article.Content,
+		article.OriginalHTML,
 		article.TextContent,
 		article.PublishedAt,
 		time.Now(),
@@ -104,7 +103,7 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 	var article Article
 	query := `
-		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, content, text_content, published_at, created_at
+		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at
 		FROM articles
 		WHERE id = $1
 	`
@@ -119,7 +118,7 @@ func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 		&article.ImageURL,
 		&article.PageType,
 		&article.ReadingTime,
-		&article.Content,
+		&article.OriginalHTML,
 		&article.TextContent,
 		&article.PublishedAt,
 		&article.CreatedAt,
