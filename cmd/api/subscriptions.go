@@ -84,7 +84,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 
 	// 6. Import des articles EN BACKGROUND (non-bloquant)
 	go func() {
-		ctx := context.Background() // Nouveau context, pas celui de la request
+		ctx := context.Background()
 		err := app.services.FeedService.ImportArticles(ctx, feed.ID, userID)
 		if err != nil {
 			app.logger.PrintError(err, nil)
@@ -96,4 +96,19 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		"subscription": subscription,
 		"message":      "Subscription created. Articles are being imported in the background.",
 	}, nil)
+}
+
+func (app *application) listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	user := app.contextGetUser(r)
+
+	subscriptions, err := app.models.Subscriptions.GetAllForUser(r.Context(), user.ID)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+		return
+	}
+
+	err = app.writeJSON(w, http.StatusOK, envelope{"subscriptions": subscriptions}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
 }

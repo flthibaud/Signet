@@ -26,7 +26,7 @@ func (m FeedModel) Get(ctx context.Context, id int64) (*Feed, error) {
 	var feed Feed
 
 	query := `
-		SELECT id, url, original_title, site_url, is_active, created_at
+		SELECT id, url, original_title, site_url, is_active, created_at, image_url, last_fetched_at
 		FROM feeds
 		WHERE id = $1`
 
@@ -37,6 +37,8 @@ func (m FeedModel) Get(ctx context.Context, id int64) (*Feed, error) {
 		&feed.SiteUrl,
 		&feed.IsActive,
 		&feed.CreatedAt,
+		&feed.ImageUrl,
+		&feed.LastFetchedAt,
 	)
 
 	if err != nil {
@@ -74,7 +76,7 @@ func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 	var feed Feed
 
 	query := `
-		SELECT id, url, original_title, site_url, is_active, created_at
+		SELECT id, url, original_title, site_url, is_active, created_at, image_url, last_fetched_at
 		FROM feeds
 		WHERE url = $1`
 
@@ -85,6 +87,8 @@ func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 		&feed.SiteUrl,
 		&feed.IsActive,
 		&feed.CreatedAt,
+		&feed.ImageUrl,
+		&feed.LastFetchedAt,
 	)
 
 	if err != nil {
