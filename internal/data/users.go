@@ -189,6 +189,37 @@ func (m UserModel) GetForToken(tokenScope, tokenPlaintext string) (*User, error)
 	return &user, nil
 }
 
+func (m UserModel) Get(id uuid.UUID) (*User, error) {
+	query := `
+		SELECT id, username, email, created_at
+		FROM users
+		WHERE id = $1`
+
+	var user User
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+
+	defer cancel()
+
+	err := m.DB.QueryRowContext(ctx, query, id).Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.CreatedAt,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, ErrRecordNotFound
+		default:
+			return nil, err
+		}
+	}
+
+	return &user, nil
+}
+
 func (m UserModel) Insert(user *User) error {
 	query := `
 		INSERT INTO users (username, email, password_hash)

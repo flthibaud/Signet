@@ -20,6 +20,9 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodPost, "/v1/users", app.registerUserHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/tokens/authentication", app.createAuthenticationTokenHandler)
 
+	// Users
+	router.HandlerFunc(http.MethodGet, "/v1/users/me", app.getCurrentUserHandler)
+
 	// Subscriptions
 	router.HandlerFunc(http.MethodGet, "/v1/subscriptions", app.listSubscriptionsHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/subscriptions", app.createSubscriptionHandler)
