@@ -1,23 +1,44 @@
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro Basics</title>
-	</head>
-	<body>
-		<slot />
-	</body>
-</html>
+---
+import "../styles/global.css";
+---
 
-<style>
-	html,
-	body {
-		margin: 0;
-		width: 100%;
-		height: 100%;
-	}
-</style>
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta
+      content="Figma UI kit designed to enhance the functionality of ChatGPT"
+      name="Brainwave - AI UI Kit"
+    />
+    <meta content="Brainwave - AI UI Kit" property="og:title" />
+    <meta
+      content="Figma UI kit designed to enhance the functionality of ChatGPT"
+      property="og:description"
+    />
+    <meta content="%PUBLIC_URL%/fb-og-image.png" property="og:image" />
+    <meta
+      property="og:url"
+      content="https://ui8.net/ui8/products/brainwave-ai-ui-design-kit"
+    />
+    <meta property="og:site_name" content="Brainwave - AI UI Kit" />
+    <meta content="Brainwave - AI UI Kit" property="twitter:title" />
+    <meta
+      content="Figma UI kit designed to enhance the functionality of ChatGPT"
+      property="twitter:description"
+    />
+    <meta content="%PUBLIC_URL%/twitter-card.png" property="twitter:image" />
+    <meta property="og:type" content="Article" />
+    <meta content="summary" name="twitter:card" />
+    <meta name="twitter:site" content="@ui8" />
+    <meta name="twitter:creator" content="@ui8" />
+    <meta property="fb:admins" content="132951670226590" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <meta name="msapplication-TileColor" content="#da532c" />
+    <meta name="theme-color" content="#ffffff" />
+  </head>
+  <body class="bg-n-7 font-sans text-[1rem] leading-6 -tracking-[.01em] text-n-7 antialiased md:bg-n-1 dark:text-n-1 dark:md:bg-n-6">
+    <slot />
+  </body>
+</html>

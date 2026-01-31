@@ -1,0 +1,39 @@
+---
+import X from '@lucide/astro/icons/x';
+import { Image } from 'astro:assets';
+import CreatePicImage from '../../assets/create-pic.png';
+---
+
+<div
+  class="relative flex min-h-screen min-h-screen-ios"
+>
+  <div
+    class="relative shrink-0 w-120 p-10 overflow-hidden hidden lg:block 2xl:w-160"
+  >
+    <div class="max-w-[25.4rem]">
+      <h2 class="mb-4">Unlock the power of RSS</h2>
+      <p class="text-[rgba(232,236,239,0.5)] text-2xl font-karla">
+        Chat with the smartest AI - Experience the power of RSS with us
+      </p>
+    </div>
+    <div class="absolute top-64 left-5 right-5 h-200">
+      <Image
+        class="object-contain"
+        src={CreatePicImage}
+        sizes="(max-width: 1180px) 50vw, 33vw"
+        alt=""
+      />
+    </div>
+  </div>
+  <div
+    class="flex grow bg-white m-0 p-0 dark:bg-[#232627] md:p-10 md:my-6 md:mx-6 md:rounded-[1.25rem]"
+  >
+    <!-- <Form /> -->
+  </div>
+  <a
+    class="group absolute top-12 right-12 flex justify-center items-center w-10 h-10 bg-[#F3F5F7] rounded-full text-0 transition-colors hover:bg-[#0084FF]"
+    href="/"
+  >
+    <X class="text-[#343839] transition-colors group-hover:text-[#FEFEFE]" name="close" />
+  </a>
+</div>
