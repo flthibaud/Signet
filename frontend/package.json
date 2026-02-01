@@ -11,7 +11,6 @@
   "dependencies": {
     "@astrojs/react": "^4.4.2",
     "@headlessui/react": "^2.2.9",
-    "@lucide/astro": "^0.563.0",
     "@tailwindcss/vite": "^4.1.18",
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",

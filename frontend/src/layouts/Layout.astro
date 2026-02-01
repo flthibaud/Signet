@@ -1,44 +1,24 @@
 ---
 import "../styles/global.css";
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const { title = "Omnivore", description = "Read-it-later app with RSS support" } = Astro.props;
 ---
 
 <!doctype html>
 <html lang="en" data-theme="light">
   <head>
-    <meta
-      content="Figma UI kit designed to enhance the functionality of ChatGPT"
-      name="Brainwave - AI UI Kit"
-    />
-    <meta content="Brainwave - AI UI Kit" property="og:title" />
-    <meta
-      content="Figma UI kit designed to enhance the functionality of ChatGPT"
-      property="og:description"
-    />
-    <meta content="%PUBLIC_URL%/fb-og-image.png" property="og:image" />
-    <meta
-      property="og:url"
-      content="https://ui8.net/ui8/products/brainwave-ai-ui-design-kit"
-    />
-    <meta property="og:site_name" content="Brainwave - AI UI Kit" />
-    <meta content="Brainwave - AI UI Kit" property="twitter:title" />
-    <meta
-      content="Figma UI kit designed to enhance the functionality of ChatGPT"
-      property="twitter:description"
-    />
-    <meta content="%PUBLIC_URL%/twitter-card.png" property="twitter:image" />
-    <meta property="og:type" content="Article" />
-    <meta content="summary" name="twitter:card" />
-    <meta name="twitter:site" content="@ui8" />
-    <meta name="twitter:creator" content="@ui8" />
-    <meta property="fb:admins" content="132951670226590" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1"
-    />
-    <meta name="msapplication-TileColor" content="#da532c" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#141718" />
+    <title>{title}</title>
   </head>
-  <body class="bg-n-7 font-sans text-[1rem] leading-6 -tracking-[.01em] text-n-7 antialiased md:bg-n-1 dark:text-n-1 dark:md:bg-n-6">
+  <body class="bg-[#141718] font-sans text-base leading-6 -tracking-[.01em] text-[#141718] antialiased dark:text-[#FEFEFE] dark:md:bg-[#232627]">
     <slot />
   </body>
 </html>

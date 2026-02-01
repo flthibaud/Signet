@@ -1,20 +1,13 @@
 import { useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
-import Logo from "../../Logo";
 import SignIn from "./SignIn";
 import CreateAccount from "./CreateAccount";
 import ForgotPassword from "./ForgotPassword";
-import { useTheme } from "../../../hooks/useTheme";
 
 const tabNav = ["Sign in", "Create account"];
 
-type FormProps = {};
-
-const Form = ({}: FormProps) => {
+const Form = () => {
   const [forgot, setForgot] = useState<boolean>(false);
-
-  const theme = useTheme();
-  const isLightMode = theme === "light";
 
   return (
     <div className="w-full max-w-126 m-auto">
@@ -22,7 +15,6 @@ const Form = ({}: FormProps) => {
         <ForgotPassword onClick={() => setForgot(false)} />
       ) : (
         <>
-          <Logo className="max-w-47.5 mx-auto mb-8" dark={isLightMode} />
           <TabGroup defaultIndex={0}>
             <TabList className="flex mb-8 p-1 bg-[#F3F5F7] rounded-xl dark:bg-[#141718]">
               {tabNav.map((button, index) => (
