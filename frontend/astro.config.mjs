@@ -8,6 +8,7 @@ import react from "@astrojs/react";
 export default defineConfig({
   vite: {
     plugins: [tailwindcss()],
+    envDir: '../',
   },
 
   integrations: [react()],
