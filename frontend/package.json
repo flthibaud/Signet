@@ -10,13 +10,16 @@
   },
   "dependencies": {
     "@astrojs/react": "^4.4.2",
+    "@headlessui/react": "^2.2.9",
     "@lucide/astro": "^0.563.0",
     "@tailwindcss/vite": "^4.1.18",
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",
     "astro": "^5.17.1",
+    "lucide-react": "^0.563.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18"
   }
 }

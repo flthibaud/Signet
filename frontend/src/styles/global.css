@@ -3,7 +3,7 @@
 @font-face {
   font-family: 'Inter';
   src: url('/fonts/Inter-VariableFont_opsz,wght.woff') format('woff');
-  font-weight: normal;
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
@@ -11,7 +11,7 @@
 @font-face {
   font-family: 'Inter';
   src: url('/fonts/Inter-Italic-VariableFont_opsz,wght.woff') format('woff');
-  font-weight: normal;
+  font-weight: 100 900;
   font-style: italic;
   font-display: swap;
 }
@@ -19,7 +19,7 @@
 @font-face {
   font-family: 'Karla';
   src: url('/fonts/Karla-VariableFont_wght.woff') format('woff');
-  font-weight: normal;
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
@@ -27,17 +27,20 @@
 @font-face {
   font-family: 'Karla';
   src: url('/fonts/Karla-Italic-VariableFont_wght.woff') format('woff');
-  font-weight: normal;
+  font-weight: 100 900;
   font-style: italic;
   font-display: swap;
 }
 
-@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
-
 @theme {
-  --font-inter: 'Inter', 'sans-serif';
-  --font-karla: 'Karla', 'sans-serif';
+  --font-inter: 'Inter', sans-serif;
+  --font-karla: 'Karla', sans-serif;
+
+  /* background colors */
+  --bg-n-1: #FFFFFF;
 }
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 body {
   margin: 0;
@@ -47,10 +50,74 @@ body {
   color: #FFFFFF;
 }
 
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-inter);
+@layer base {
+  h2 {
+    font-family: var(--font-inter);
+    font-size: var(--text-5xl);
+    line-height: var(--tw-leading, var(--text-5xl--line-height));
+    font-weight: var(--font-weight-bold);
+    letter-spacing: calc(.025em * -1);
+    --tw-font-weight: var(--font-weight-bold);
+    --tw-tracking: calc(.025em * -1);
+  }
 }
 
-h2 {
-  @apply font-inter text-5xl font-bold -tracking-[.025em]
+@layer components {
+  .base1 {
+    font-family: var(--font-inter);
+    font-size: 1rem;
+    line-height: calc(var(--spacing) * 6);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: calc(.03em * -1);
+    --tw-tracking: calc(.03em * -1);
+    --tw-leading: calc(var(--spacing) * 6);
+    --tw-font-weight: var(--font-weight-medium);
+  }
+
+  .base2 {
+    font-family: var(--font-inter);
+    font-size: 0.875rem;
+    line-height: calc(var(--spacing) * 6);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: calc(.02em * -1);
+    --tw-tracking: calc(.02em * -1);
+    --tw-leading: calc(var(--spacing) * 6);
+    --tw-font-weight: var(--font-weight-medium);
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(var(--spacing) * 12);
+    padding-inline: calc(var(--spacing) * 5.5);
+    border-style: var(--tw-border-style);
+    border-width: 2px;
+    border-radius: var(--radius-xl);
+    font-weight: var(--font-weight-semibold);
+    transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+    --tw-font-weight: var(--font-weight-semibold);
+
+    @variant disabled {
+      opacity: 0.2;
+      pointer-events: none;
+    }
+  }
+
+  .btn-blue {
+    background-color: #0084FF;
+    border: #0084FF;
+    color: #FEFEFE;
+    fill: #FEFEFE;
+
+    @variant hover {
+      background-color: #0077E6;
+      border-color: transparent;
+    }
+  }
+
+  .btn-large {
+    height: calc(var(--spacing) * 13);
+  }
 }
