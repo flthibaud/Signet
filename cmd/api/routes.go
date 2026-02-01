@@ -37,6 +37,15 @@ func (app *application) routes() http.Handler {
 		panic(err)
 	}
 	fileServer := http.FileServer(http.FS(distFS))
+
+	// Protected route: requires authentication
+	router.HandlerFunc(http.MethodGet, "/app", app.requireAuth(app.serveIndex(distFS, "app/index.html")))
+
+	// Guest-only routes: redirect to /app if already authenticated
+	router.HandlerFunc(http.MethodGet, "/auth", app.requireGuest(app.serveIndex(distFS, "auth/index.html")))
+	router.HandlerFunc(http.MethodGet, "/", app.requireGuest(app.serveIndex(distFS, "index.html")))
+
+	// Static assets (JS, CSS, images) served without auth checks
 	router.NotFound = fileServer
 
 	return app.recoverPanic(app.rateLimit(app.authenticate(router)))
