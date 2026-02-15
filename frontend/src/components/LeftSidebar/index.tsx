@@ -77,7 +77,7 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
       <div
         className={twMerge(
           `fixed z-20 top-0 left-0 bottom-0 flex flex-col pt-30 px-0 bg-[#141718]`,
-          isCollapsed ? "md:w-24 md:pb-38 w-16 pb-30" : "w-80 pb-58 px-4",
+          isCollapsed ? "md:w-24 md:pb-38 w-16 pb-30 md:px-4" : "w-80 pb-58 px-4",
         )}
       >
         <div
