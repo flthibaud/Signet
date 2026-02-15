@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { twMerge } from "tailwind-merge";
 import type { LucideIcon } from "lucide-react";
 
@@ -15,8 +16,11 @@ type NavigationProps = {
 };
 
 const Navigation = ({ visible, items }: NavigationProps) => {
-  // const pathname = usePathname();
-  const pathname = "/app"; // Placeholder for pathname
+  const [pathname, setPathname] = useState("");
+
+  useEffect(() => {
+    setPathname(window.location.pathname);
+  }, []);
 
   return (
     <div className={`${!visible && "px-2"}`}>

@@ -8,7 +8,7 @@ type AppShellProps = {
 };
 
 const AppShell = ({ children }: AppShellProps) => {
-  const [isCollapsed, setIsCollapsed] = useState(true);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
     <div
