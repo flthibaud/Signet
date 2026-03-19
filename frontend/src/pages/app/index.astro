@@ -1,5 +1,6 @@
 ---
 import DashboardLayout from "@/layouts/DashboardLayout.astro"
+import { Link } from "@/components/Links/Link"
 ---
 
 <DashboardLayout>
@@ -17,29 +18,7 @@ import DashboardLayout from "@/layouts/DashboardLayout.astro"
     <div
       class="grow px-10 py-20 overflow-y-auto scroll-smooth scrollbar-none 2xl:py-12 md:px-4 md:pt-0 md:pb-6"
     >
-      {Array.from({ length: 50 }).map((_, i) => (
-        <div
-          class="flex gap-4 mb-6 last:mb-0 cursor-pointer"
-        >
-          <div class="w-24 h-24 rounded-sm bg-gray-300" />
-          <div class="flex flex-col gap-4">
-            <div class="flex flex-row items-center justify-between">
-              <h3 class="text-xl font-medium text-gray-900 dark:text-white">
-                Lorem ipsum dolor sit amet
-              </h3>
-              <span class="text-sm font-medium text-gray-900 dark:text-white">18 Mars 2026</span>
-            </div>
-            <p class="text-base text-ellipsis text-gray-500 dark:text-gray-400 whitespace-nowrap overflow-hidden w-200">
-              Lorem ipsum dolor, sit amet consectetur adipisicing elit. Provident, est voluptatem nisi cum magni laboriosam ex repellendus nesciunt dolor sunt alias voluptatibus ipsa dignissimos? Temporibus sed quod possimus recusandae illo.
-            </p>
-            <div class="flex gap-2">
-              <span class="text-sm text-gray-500 dark:text-gray-400">Acme Inc.</span>
-              <span class="text-sm text-gray-500 dark:text-gray-400"> - 4 minutes</span>
-              <span class="text-sm text-gray-500 dark:text-gray-400"> - tags</span>
-            </div>
-          </div>
-        </div>
-      ))}
+      <Link client:load />
     </div>
 
   </div>
