@@ -15,7 +15,8 @@
         "eamodio.gitlens",
         "golang.go",
         "bradlc.vscode-tailwindcss",
-        "astro-build.astro-vscode"
+        "astro-build.astro-vscode",
+        "Anthropic.claude-code"
       ]
     }
   },

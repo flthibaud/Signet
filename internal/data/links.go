@@ -15,18 +15,30 @@ import (
 
 type Link struct {
 	ID                                int64     `json:"id"`
-	UserID                            uuid.UUID `json:"user_id"`
-	ArticleID                         int64     `json:"article_id"`
+	UserID                            uuid.UUID `json:"-"`
+	ArticleID                         int64     `json:"-"`
 	Slug                              string    `json:"slug"`
-	ArticleHash                       string    `json:"article_hash"`
+	ArticleHash                       string    `json:"-"`
 	ArticleUrl                        string    `json:"article_url"`
 	IsRead                            bool      `json:"is_read"`
-	IsFavorite                        bool      `json:"is_favorite"`
+	IsStarred                         bool      `json:"is_starred"`
 	ArticleReadingProgressAnchorIndex int       `json:"article_reading_progress_anchor_index"`
 	FeedID                            *int64    `json:"feed_id"`
+	CreatedAt                         time.Time `json:"created_at"`
 	SavedAt                           time.Time `json:"saved_at"`
 	ArchivedAt                        time.Time `json:"archived_at"`
 	UpdatedAt                         time.Time `json:"updated_at"`
+}
+
+// LinkWithArticle combines a user's link state with the article content.
+type LinkWithArticle struct {
+	Link
+	Title       string  `json:"title"`
+	Description string  `json:"description,omitempty"`
+	Author      string  `json:"author"`
+	ImageURL    string  `json:"image_url,omitempty"`
+	ReadingTime float64 `json:"reading_time_minutes"`
+	FeedTitle   *string `json:"feed_title,omitempty"`
 }
 
 type LinkModel struct {
@@ -60,6 +72,63 @@ func (m LinkModel) Insert(ctx context.Context, link *Link) error {
 	}
 
 	return nil
+}
+
+func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*LinkWithArticle, int, error) {
+	query := `
+		SELECT count(*) OVER(),
+			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
+			l.saved_at, l.updated_at,
+			a.title, a.description, a.author, a.image_url, a.reading_time_minutes,
+			f.original_title
+		FROM links l
+		JOIN articles a ON l.article_id = a.id
+		LEFT JOIN feeds f ON l.feed_id = f.id
+		WHERE l.user_id = $1
+			AND l.archived_at IS NULL
+		ORDER BY l.saved_at DESC
+		LIMIT $2 OFFSET $3`
+
+	rows, err := m.DB.QueryContext(ctx, query, userID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	totalRecords := 0
+	var links []*LinkWithArticle
+
+	for rows.Next() {
+		var link LinkWithArticle
+		err := rows.Scan(
+			&totalRecords,
+			&link.ID,
+			&link.ArticleID,
+			&link.Slug,
+			&link.FeedID,
+			&link.IsRead,
+			&link.IsStarred,
+			&link.SavedAt,
+			&link.UpdatedAt,
+			&link.Title,
+			&link.Description,
+			&link.Author,
+			&link.ImageURL,
+			&link.ReadingTime,
+			&link.FeedTitle,
+		)
+		if err != nil {
+			return nil, 0, err
+		}
+		link.UserID = userID
+		links = append(links, &link)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return links, totalRecords, nil
 }
 
 func (m LinkModel) Get(ctx context.Context, id int64) (*Link, error) {

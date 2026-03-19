@@ -86,7 +86,7 @@ func (app *application) createAuthenticationTokenHandler(w http.ResponseWriter, 
 
 	// Encode the token to JSON and send it in the response along with a 201 Created
 	// status code.
-	err = app.writeJSON(w, http.StatusCreated, nil, nil)
+	err = app.writeJSON(w, http.StatusCreated, envelope{"authentication_token": token}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}

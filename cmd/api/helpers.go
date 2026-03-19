@@ -14,6 +14,43 @@ import (
 
 type envelope map[string]any
 
+// Pagination holds page/page_size values parsed from query string parameters.
+type Pagination struct {
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+}
+
+// Limit returns the SQL LIMIT value.
+func (p Pagination) Limit() int {
+	return p.PageSize
+}
+
+// Offset returns the SQL OFFSET value.
+func (p Pagination) Offset() int {
+	return (p.Page - 1) * p.PageSize
+}
+
+// readPagination extracts page and page_size from query params with defaults and bounds.
+func (app *application) readPagination(r *http.Request) Pagination {
+	qs := r.URL.Query()
+
+	page := 1
+	if v := qs.Get("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+
+	pageSize := 20
+	if v := qs.Get("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			pageSize = n
+		}
+	}
+
+	return Pagination{Page: page, PageSize: pageSize}
+}
+
 // Retrieve the "id" URL parameter from the current request context, then convert it to
 // an integer and return it. If the operation isn't successful, return 0 and an error.
 func (app *application) readIDParam(r *http.Request) (int64, error) {

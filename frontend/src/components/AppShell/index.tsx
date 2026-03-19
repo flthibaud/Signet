@@ -22,7 +22,7 @@ const AppShell = ({ children }: AppShellProps) => {
       />
       <div className="flex md:py-6 py-0 h-screen h-screen-ios">
         <div className="relative flex grow max-w-full bg-[#FEFEFE] md:rounded-[1.25rem] rounded-none dark:bg-[#232627]">
-          <div className="relative flex flex-col grow max-w-full md:pt-18">
+          <div className="relative flex flex-col grow max-w-full overflow-hidden">
             <Burger
               className={!isCollapsed ? "hidden" : ""}
               onClick={() => setIsCollapsed(!isCollapsed)}

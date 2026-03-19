@@ -24,12 +24,15 @@ const Navigation = ({ visible, items }: NavigationProps) => {
 
   return (
     <div className={`${!visible && "px-2"}`}>
-      {items.map((item, index) =>
-        item.url ? (
+      {items.map((item, index) => {
+        const isActive = 
+          item.url && 
+          pathname.replace(/\/$/, "") === item.url.replace(/\/$/, "");
+        return item.url ? (
           <a
             className={twMerge(
               `flex items-center h-12 base2 font-semibold text-[#E8ECEF]/75 rounded-lg transition-colors hover:text-[#FEFEFE] ${
-                pathname === item.url &&
+                isActive &&
                 "text-[#FEFEFE] bg-gradient-to-l from-[#323337] to-[rgba(70,79,111,0.3)] shadow-[inset_0px_0.0625rem_0_rgba(255,255,255,0.05),0_0.25rem_0.5rem_0_rgba(0,0,0,0.1)]"
               } ${visible ? "px-5" : "px-3"}`,
             )}
@@ -55,8 +58,8 @@ const Navigation = ({ visible, items }: NavigationProps) => {
               </div>
             )}
           </button>
-        ),
-      )}
+        );
+      })}
     </div>
   );
 };

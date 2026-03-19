@@ -31,6 +31,9 @@ func (app *application) routes() http.Handler {
 	// Articles d'un feed
 	// router.HandlerFunc(http.MethodGet, "/v1/subscriptions/:id/articles", app.listSubscriptionArticlesHandler)
 
+	// Liste des articles (tous les articles de tous les feeds, triés par date de publication)
+	router.HandlerFunc(http.MethodGet, "/v1/links", app.listLinksHandler)
+
 	// Serve embedded frontend (Astro build)
 	distFS, err := fs.Sub(omnivore.FrontendDist, "frontend/dist")
 	if err != nil {
