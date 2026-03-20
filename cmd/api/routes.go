@@ -34,19 +34,23 @@ func (app *application) routes() http.Handler {
 	// Liste des articles (tous les articles de tous les feeds, triés par date de publication)
 	router.HandlerFunc(http.MethodGet, "/v1/links", app.listLinksHandler)
 
-	// Serve embedded frontend (Astro build)
-	distFS, err := fs.Sub(omnivore.FrontendDist, "frontend/dist")
+	// Serve embedded frontend (React Router SPA build)
+	distFS, err := fs.Sub(omnivore.FrontendDist, "frontend/build/client")
 	if err != nil {
 		panic(err)
 	}
 	fileServer := http.FileServer(http.FS(distFS))
 
-	// Protected route: requires authentication
-	router.HandlerFunc(http.MethodGet, "/app", app.requireAuth(app.serveIndex(distFS, "app/index.html")))
+	// SPA routes: all serve the same index.html, client-side router handles the rest
+	spaIndex := app.serveIndex(distFS, "index.html")
+
+	// Protected routes: require authentication
+	router.HandlerFunc(http.MethodGet, "/app", app.requireAuth(spaIndex))
+	router.HandlerFunc(http.MethodGet, "/app/*path", app.requireAuth(spaIndex))
 
 	// Guest-only routes: redirect to /app if already authenticated
-	router.HandlerFunc(http.MethodGet, "/auth", app.requireGuest(app.serveIndex(distFS, "auth/index.html")))
-	router.HandlerFunc(http.MethodGet, "/", app.requireGuest(app.serveIndex(distFS, "index.html")))
+	router.HandlerFunc(http.MethodGet, "/auth", app.requireGuest(spaIndex))
+	router.HandlerFunc(http.MethodGet, "/", app.requireGuest(spaIndex))
 
 	// Static assets (JS, CSS, images) served without auth checks
 	router.NotFound = fileServer
