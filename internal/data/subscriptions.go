@@ -26,13 +26,6 @@ type SubscriptionModel struct {
 	DB *sql.DB
 }
 
-type SubscriptionDisplay struct {
-	ID          int64  `json:"id"`
-	FeedID      int64  `json:"feed_id"`
-	DisplayName string `json:"display_name"`
-	FeedUrl     string `json:"feed_url"`
-}
-
 func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error) {
 	query := `
 		SELECT EXISTS (

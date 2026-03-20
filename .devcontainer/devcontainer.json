@@ -13,8 +13,18 @@
         "esbenp.prettier-vscode",
         "GitHub.copilot-chat",
         "eamodio.gitlens",
-        "golang.go"
+        "golang.go",
+        "bradlc.vscode-tailwindcss",
+        "astro-build.astro-vscode",
+        "Anthropic.claude-code"
       ]
+    }
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts",
+      "pnpm": "latest"
     }
   },
 

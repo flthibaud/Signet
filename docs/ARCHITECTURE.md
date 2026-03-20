@@ -1,20 +1,23 @@
-# Architecture RSS & Gestion des Articles
+# Architecture Omnivore-Go
 
-## 📋 Table des matières
+## Table des matières
 
 - [Vue d'ensemble](#vue-densemble)
+- [Structure du projet](#structure-du-projet)
+- [Architecture en couches](#architecture-en-couches)
+- [API REST](#api-rest)
+- [Authentification](#authentification)
 - [Modèle de données](#modèle-de-données)
 - [Flux d'import RSS](#flux-dimport-rss)
 - [Déduplication](#déduplication)
 - [Requêtes SQL courantes](#requêtes-sql-courantes)
-- [Processus de synchronisation](#processus-de-synchronisation)
-- [Cas d'usage](#cas-dusage)
+- [Configuration](#configuration)
 
 ---
 
 ## Vue d'ensemble
 
-Ce système implémente un lecteur "read-it-later" avec support natif des flux RSS/Atom. L'architecture repose sur une séparation claire entre :
+Omnivore-Go est un lecteur "read-it-later" avec support natif des flux RSS/Atom, écrit en Go. L'architecture repose sur une séparation claire entre :
 
 - **Le contenu partagé** : Articles stockés une seule fois
 - **Les données personnelles** : État de lecture et organisation par utilisateur
@@ -23,9 +26,215 @@ Ce système implémente un lecteur "read-it-later" avec support natif des flux R
 ### Principes fondamentaux
 
 1. **Un article = une entrée** : Le même article sauvé par 1000 utilisateurs n'est stocké qu'une fois
-2. **Déduplication par hash** : Chaque URL unique a un hash pour éviter les doublons
+2. **Déduplication par hash** : Chaque URL unique a un hash SHA256 pour éviter les doublons
 3. **Séparation contenu/métadonnées** : Le HTML/texte est séparé de l'état de lecture
-4. **RSS first-class** : Les flux RSS ne sont pas un simple add-on mais une fonctionnalité centrale
+4. **RSS first-class** : Les flux RSS sont une fonctionnalité centrale
+
+---
+
+## Structure du projet
+
+```
+omnivore-go/
+├── cmd/
+│   └── api/                    # Point d'entrée de l'API
+│       ├── main.go             # Bootstrap, config, démarrage
+│       ├── server.go           # Serveur HTTP avec graceful shutdown
+│       ├── routes.go           # Définition des routes
+│       ├── middleware.go       # Auth, rate limiting, panic recovery
+│       ├── context.go          # Gestion du contexte (user)
+│       ├── helpers.go          # Utilitaires JSON, parsing params
+│       ├── errors.go           # Réponses d'erreur standardisées
+│       ├── healthcheck.go      # Handler healthcheck
+│       ├── users.go            # Handler inscription
+│       ├── tokens.go           # Handler authentification
+│       ├── subscriptions.go    # Handlers abonnements RSS
+│       └── articles.go         # Handlers articles (en cours)
+│
+├── internal/
+│   ├── data/                   # Couche d'accès aux données
+│   │   ├── models.go           # Registre des modèles
+│   │   ├── users.go            # CRUD utilisateurs
+│   │   ├── articles.go         # CRUD articles
+│   │   ├── feeds.go            # CRUD flux RSS
+│   │   ├── subscriptions.go    # CRUD abonnements
+│   │   ├── links.go            # CRUD liens (articles sauvés)
+│   │   └── tokens.go           # Gestion des tokens
+│   │
+│   ├── service/                # Logique métier
+│   │   ├── services.go         # Conteneur de services
+│   │   └── fetcher.go          # Fetching RSS & scraping articles
+│   │
+│   ├── validator/              # Validation des entrées
+│   │   └── validator.go        # Helpers de validation
+│   │
+│   └── jsonlog/                # Logging structuré
+│       └── jsonlog.go          # Logger JSON
+│
+├── migrations/                 # Scripts de migration SQL
+├── docs/
+│   ├── schema.sql              # Schéma complet de la BDD
+│   └── ARCHITECTURE.md         # Ce document
+│
+├── go.mod                      # Dépendances Go
+└── Makefile                    # Commandes de build/run
+```
+
+---
+
+## Architecture en couches
+
+L'application suit une architecture en 3 couches :
+
+```
+┌─────────────────────────────────────────┐
+│           API Handlers (cmd/api/)       │
+│   Routes, Middleware, Validation HTTP   │
+└────────────────────┬────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────┐
+│      Service Layer (internal/service/)  │
+│   Logique métier, Fetching, Scraping    │
+└────────────────────┬────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────┐
+│       Data Layer (internal/data/)       │
+│    Modèles, Requêtes SQL, Validation    │
+└────────────────────┬────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────┐
+│              PostgreSQL                 │
+└─────────────────────────────────────────┘
+```
+
+### Responsabilités
+
+| Couche | Responsabilité |
+|--------|----------------|
+| **API** | Routing HTTP, validation des requêtes, sérialisation JSON, middleware |
+| **Service** | Orchestration, logique métier complexe, appels externes (RSS, scraping) |
+| **Data** | CRUD base de données, requêtes SQL, mapping struct/table |
+
+---
+
+## API REST
+
+### Endpoints implémentés
+
+| Méthode | Route | Auth | Description |
+|---------|-------|------|-------------|
+| `GET` | `/v1/healthcheck` | Non | Vérification santé du serveur |
+| `POST` | `/v1/users` | Non | Inscription d'un utilisateur |
+| `POST` | `/v1/tokens/authentication` | Non | Connexion (obtenir un token) |
+| `GET` | `/v1/subscriptions` | Oui | Liste des abonnements RSS |
+| `POST` | `/v1/subscriptions` | Oui | S'abonner à un flux RSS |
+
+### Endpoints prévus (non implémentés)
+
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| `DELETE` | `/v1/subscriptions/:id` | Se désabonner d'un flux |
+| `GET` | `/v1/subscriptions/:id/articles` | Articles d'un flux |
+| `GET` | `/v1/articles` | Liste des articles sauvés |
+| `GET` | `/v1/articles/:slug` | Détail d'un article |
+| `PATCH` | `/v1/articles/:slug` | Modifier état (lu, archivé, etc.) |
+
+### Middleware
+
+Les requêtes passent par 3 middleware dans cet ordre :
+
+```go
+recoverPanic → rateLimit → authenticate → handler
+```
+
+1. **recoverPanic** : Capture les panics et retourne une erreur 500
+2. **rateLimit** : Limite par IP (configurable RPS + burst)
+3. **authenticate** : Valide le token Bearer, attache l'user au contexte
+
+### Format des réponses
+
+**Succès** :
+```json
+{
+  "subscription": {
+    "id": 1,
+    "feed": { ... },
+    "unread_count": 42
+  }
+}
+```
+
+**Erreur** :
+```json
+{
+  "error": "message d'erreur"
+}
+```
+
+**Erreur de validation** :
+```json
+{
+  "error": {
+    "email": "must be a valid email address",
+    "password": "must be at least 8 characters"
+  }
+}
+```
+
+---
+
+## Authentification
+
+### Flux de connexion
+
+```
+┌──────┐          ┌─────┐          ┌────┐
+│Client│          │ API │          │ DB │
+└──┬───┘          └──┬──┘          └─┬──┘
+   │                 │               │
+   │ POST /v1/users  │               │
+   │ {email,password}│               │
+   │────────────────>│               │
+   │                 │ INSERT user   │
+   │                 │ (bcrypt hash) │
+   │                 │──────────────>│
+   │                 │               │
+   │   201 Created   │               │
+   │<────────────────│               │
+   │                 │               │
+   │ POST /v1/tokens/authentication  │
+   │ {email,password}│               │
+   │────────────────>│               │
+   │                 │ Verify hash   │
+   │                 │──────────────>│
+   │                 │               │
+   │                 │ INSERT token  │
+   │                 │ (24h expiry)  │
+   │                 │──────────────>│
+   │                 │               │
+   │ {token: "xxx"}  │               │
+   │<────────────────│               │
+   │                 │               │
+   │ GET /v1/subscriptions           │
+   │ Authorization: Bearer xxx       │
+   │────────────────>│               │
+   │                 │ Validate token│
+   │                 │──────────────>│
+   │                 │               │
+   │   200 OK        │               │
+   │<────────────────│               │
+└──┴───┘          └──┴──┘          └─┴──┘
+```
+
+### Détails techniques
+
+- **Hachage mot de passe** : bcrypt (cost factor par défaut)
+- **Token** : 26 caractères base32, stocké en SHA256 dans la BDD
+- **Expiration** : 24 heures
+- **Header** : `Authorization: Bearer <token>`
 
 ---
 
@@ -33,138 +242,142 @@ Ce système implémente un lecteur "read-it-later" avec support natif des flux R
 
 ### Schéma relationnel
 
-![img](./Untitled%20Diagram_2026-01-02T16_24_51.089Z.png)
+```
+┌─────────┐       ┌──────────────┐       ┌───────┐
+│  users  │───────│ subscriptions│───────│ feeds │
+└────┬────┘       └──────────────┘       └───┬───┘
+     │                                       │
+     │            ┌───────┐                  │
+     └────────────│ links │──────────────────┘
+                  └───┬───┘
+                      │
+     ┌────────────────┼────────────────┐
+     │                │                │
+┌────▼────┐    ┌──────▼──────┐   ┌─────▼─────┐
+│ articles│    │ link_labels │   │ highlights│
+└─────────┘    └──────┬──────┘   └───────────┘
+                      │
+                ┌─────▼─────┐
+                │  labels   │
+                └───────────┘
+```
 
 ### Tables principales
 
 #### `users`
-Utilisateurs de l'application.
 
 ```sql
-id           UUID PRIMARY KEY
-username     TEXT UNIQUE
-email        CITEXT UNIQUE
+id            UUID PRIMARY KEY (auto-generated)
+username      TEXT UNIQUE
+email         CITEXT UNIQUE
 password_hash BYTEA
-created_at   TIMESTAMP
-updated_at   TIMESTAMP
+created_at    TIMESTAMP
+updated_at    TIMESTAMP
 ```
 
 #### `articles`
-Contenu des articles (partagé entre tous les utilisateurs).
+
+Contenu partagé entre tous les utilisateurs.
 
 ```sql
 id                    BIGINT PRIMARY KEY
 url                   TEXT NOT NULL
-hash                  TEXT UNIQUE -- Hash SHA256 de l'URL
-title                 TEXT
+hash                  TEXT UNIQUE        -- SHA256 de l'URL
+title                 TEXT NOT NULL
 description           TEXT
 author                TEXT
 image_url             TEXT
-page_type             TEXT -- 'article', 'video', 'pdf'
-reading_time_minutes  REAL
-original_html         TEXT -- HTML brut
-content               TEXT -- HTML nettoyé
-text_content          TEXT -- Texte seul
-tsv                   TSVECTOR -- Pour recherche full-text
+page_type             TEXT               -- 'article', 'video', 'pdf'
+reading_time_minutes  REAL               -- Calculé automatiquement
+original_html         TEXT               -- HTML brut (debug/fallback)
+content               TEXT               -- HTML nettoyé
+text_content          TEXT NOT NULL      -- Texte pour recherche
+tsv                   TSVECTOR           -- Index full-text
 published_at          TIMESTAMP
 created_at            TIMESTAMP
 updated_at            TIMESTAMP
 ```
 
-**Rôle** : Stockage unique du contenu. Un article existe indépendamment des utilisateurs.
-
 #### `feeds`
-Flux RSS/Atom disponibles dans le système.
+
+Flux RSS/Atom disponibles.
 
 ```sql
 id              BIGINT PRIMARY KEY
-url             TEXT UNIQUE -- URL du flux RSS/Atom
-original_title  TEXT -- Titre du feed (ex: "Le Monde - Actualités")
-site_url        TEXT -- URL du site web
-image_url       TEXT -- Logo/favicon du feed
+url             TEXT UNIQUE
+original_title  TEXT
+site_url        TEXT
+image_url       TEXT
 last_fetched_at TIMESTAMP
-is_active       BOOLEAN
+is_active       BOOLEAN DEFAULT TRUE
 created_at      TIMESTAMP
 ```
 
-**Rôle** : Catalogue des flux RSS disponibles. Partagé entre utilisateurs.
-
 #### `subscriptions`
-Abonnements aux flux RSS par utilisateur.
+
+Abonnements utilisateur ↔ flux.
 
 ```sql
 id           BIGINT PRIMARY KEY
 user_id      UUID REFERENCES users
 feed_id      BIGINT REFERENCES feeds
-custom_title TEXT -- Nom personnalisé (override original_title)
-custom_icon  TEXT -- Emoji ou URL
-category     TEXT -- "Tech", "News", "Blogs"
+custom_title TEXT               -- Override du titre
+custom_icon  TEXT               -- Emoji ou URL
+category     TEXT               -- "Tech", "News", etc.
 created_at   TIMESTAMP
 
-UNIQUE(user_id, feed_id) -- Un user ne peut s'abonner 2× au même feed
+UNIQUE(user_id, feed_id)
 ```
 
-**Rôle** : Relation many-to-many entre users et feeds avec personnalisation.
-
 #### `links`
+
 Articles sauvés par utilisateur (état personnel).
 
 ```sql
 id                             BIGINT PRIMARY KEY
 user_id                        UUID REFERENCES users
 article_id                     BIGINT REFERENCES articles
-feed_id                        BIGINT REFERENCES feeds -- Optionnel
-slug                           TEXT
-is_read                        BOOLEAN
-is_starred                     BOOLEAN
-reading_progress               REAL -- 0.0 à 1.0
-reading_progress_anchor_index  INTEGER -- Paragraphe actuel
+feed_id                        BIGINT REFERENCES feeds  -- NULL si sauvé manuellement
+slug                           TEXT UNIQUE(user_id, slug)
+is_read                        BOOLEAN DEFAULT FALSE
+is_starred                     BOOLEAN DEFAULT FALSE
+reading_progress               REAL    -- 0.0 à 1.0
+reading_progress_anchor_index  INTEGER -- Index du paragraphe
 saved_at                       TIMESTAMP
 archived_at                    TIMESTAMP
 created_at                     TIMESTAMP
 updated_at                     TIMESTAMP
 
-UNIQUE(user_id, article_id) -- Un user ne peut sauver 2× le même article
+UNIQUE(user_id, article_id)
 ```
 
-**Rôle** : État de lecture et organisation personnelle de chaque article par utilisateur.
-
 #### `labels`
-Tags personnalisés par utilisateur.
+
+Tags personnalisés.
 
 ```sql
 id          BIGINT PRIMARY KEY
 user_id     UUID REFERENCES users
 name        TEXT
-color       TEXT
+color       TEXT DEFAULT '#808080'
 description TEXT
-position    INTEGER
+position    INTEGER            -- Ordre d'affichage
 created_at  TIMESTAMP
 
 UNIQUE(user_id, name)
 ```
 
-#### `link_labels`
-Association many-to-many entre links et labels.
-
-```sql
-link_id    BIGINT REFERENCES links
-label_id   BIGINT REFERENCES labels
-created_at TIMESTAMP
-
-PRIMARY KEY(link_id, label_id)
-```
-
 #### `highlights`
-Annotations et surlignages sur les articles.
+
+Annotations sur les articles.
 
 ```sql
 id             BIGINT PRIMARY KEY
 user_id        UUID REFERENCES users
 link_id        BIGINT REFERENCES links
-quote          TEXT -- Texte surligné
-annotation     TEXT -- Note personnelle
-color          TEXT
+quote          TEXT NOT NULL      -- Texte surligné
+annotation     TEXT               -- Note personnelle
+color          TEXT DEFAULT '#FFEB3B'
 position_start INTEGER
 position_end   INTEGER
 created_at     TIMESTAMP
@@ -175,220 +388,108 @@ updated_at     TIMESTAMP
 
 ## Flux d'import RSS
 
-### 1. Ajout d'un flux RSS
-
-#### Étape 1 : L'utilisateur soumet une URL RSS
+### 1. Création d'un abonnement
 
 ```
-User input: https://blog.example.com/feed.xml
+User                API                    FeedService              DB
+ │                   │                          │                    │
+ │ POST /v1/subscriptions                       │                    │
+ │ {url: "https://..."}                         │                    │
+ │──────────────────>│                          │                    │
+ │                   │                          │                    │
+ │                   │ Valide URL               │                    │
+ │                   │                          │                    │
+ │                   │ Feed existe?             │                    │
+ │                   │─────────────────────────────────────────────>│
+ │                   │                          │                    │
+ │                   │ Non → CreateFromURL()    │                    │
+ │                   │─────────────────────────>│                    │
+ │                   │                          │ HTTP GET RSS       │
+ │                   │                          │───────────>        │
+ │                   │                          │ Parse gofeed       │
+ │                   │                          │ INSERT feed        │
+ │                   │                          │───────────────────>│
+ │                   │                          │                    │
+ │                   │ INSERT subscription      │                    │
+ │                   │─────────────────────────────────────────────>│
+ │                   │                          │                    │
+ │                   │ go ImportArticles()      │  (async)           │
+ │                   │─────────────────────────>│                    │
+ │                   │                          │                    │
+ │  202 Accepted     │                          │                    │
+ │<──────────────────│                          │                    │
 ```
 
-#### Étape 2 : Vérification si le feed existe déjà
-
-```sql
-SELECT id, url FROM feeds WHERE url = 'https://blog.example.com/feed.xml';
-```
-
-- **Existe** → Récupérer `feed_id`
-- **N'existe pas** → Passer à l'étape 3
-
-#### Étape 3 : Fetch et parsing du flux RSS
-
-```go
-// Pseudo-code Go
-resp, err := http.Get(feedURL)
-feed, err := parseFeed(resp.Body) // Utiliser gofeed ou équivalent
-
-// Extraire les métadonnées
-feedData := Feed{
-    URL:           feedURL,
-    OriginalTitle: feed.Title,
-    SiteURL:       feed.Link,
-    ImageURL:      feed.Image.URL,
-    LastFetchedAt: time.Now(),
-}
-```
-
-#### Étape 4 : Insertion du feed
-
-```sql
-INSERT INTO feeds (url, original_title, site_url, image_url, last_fetched_at)
-VALUES ($1, $2, $3, $4, NOW())
-RETURNING id;
-```
-
-#### Étape 5 : Création de la subscription
-
-```sql
-INSERT INTO subscriptions (user_id, feed_id, created_at)
-VALUES ($1, $2, NOW());
-```
-
-### 2. Import des articles du feed
+### 2. Import des articles (async)
 
 Pour chaque `<item>` du flux RSS :
 
-#### Étape 1 : Calculer le hash de l'URL
-
 ```go
-import "crypto/sha256"
+// 1. Calculer le hash de l'URL
+hash := sha256(item.Link)
 
-func calculateHash(url string) string {
-    hash := sha256.Sum256([]byte(url))
-    return hex.EncodeToString(hash[:])
+// 2. Vérifier si l'article existe
+article, err := models.Articles.GetByHash(ctx, hash)
+
+// 3. Si nouveau, scraper le contenu
+if article == nil {
+    // Tente readability, fallback sur RSS description
+    parsed := fetchWithReadability(item.Link)
+    article = createArticle(parsed, hash)
+}
+
+// 4. Créer le link pour l'utilisateur
+if !linkExists(userID, article.ID) {
+    slug := generateUniqueSlug(userID, article.Title)
+    createLink(userID, article.ID, feedID, slug)
 }
 ```
 
-#### Étape 2 : Vérifier si l'article existe déjà
+### Librairies utilisées
 
-```sql
-SELECT id FROM articles WHERE hash = $1;
-```
-
-- **Existe** → Récupérer `article_id`, passer à l'étape 5
-- **N'existe pas** → Passer à l'étape 3
-
-#### Étape 3 : Fetch du contenu de l'article
-
-```go
-// Utiliser un parser comme go-readability
-resp, err := http.Get(articleURL)
-article, err := readability.FromReader(resp.Body, articleURL)
-
-articleData := Article{
-    URL:         articleURL,
-    Hash:        calculateHash(articleURL),
-    Title:       article.Title,
-    Author:      article.Byline,
-    Content:     article.Content,      // HTML nettoyé
-    TextContent: article.TextContent,  // Texte brut
-    ImageURL:    article.Image,
-    PublishedAt: parseDate(item.PubDate),
-}
-```
-
-#### Étape 4 : Insertion de l'article
-
-```sql
-INSERT INTO articles (
-    url, hash, title, description, author, image_url, 
-    content, text_content, published_at
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id;
-```
-
-**Note** : Le trigger `calculate_reading_time()` calcule automatiquement `reading_time_minutes`.
-
-#### Étape 5 : Vérifier si l'utilisateur a déjà ce link
-
-```sql
-SELECT id FROM links 
-WHERE user_id = $1 AND article_id = $2;
-```
-
-- **Existe** → Skip (l'utilisateur l'a déjà)
-- **N'existe pas** → Créer le link
-
-#### Étape 6 : Création du link
-
-```sql
-INSERT INTO links (
-    user_id, article_id, feed_id, slug, 
-    saved_at, is_read, is_starred
-)
-VALUES ($1, $2, $3, $4, NOW(), false, false);
-```
-
-### 3. Mise à jour du feed
-
-```sql
-UPDATE feeds 
-SET last_fetched_at = NOW() 
-WHERE id = $1;
-```
+| Librairie | Usage |
+|-----------|-------|
+| `github.com/mmcdole/gofeed` | Parsing RSS/Atom |
+| `codeberg.org/readeck/go-readability/v2` | Extraction du contenu (readability) |
+| `github.com/microcosm-cc/bluemonday` | Sanitization HTML (XSS) |
 
 ---
 
 ## Déduplication
 
-### Principe
+### Stratégie multi-niveaux
 
-La déduplication s'opère à plusieurs niveaux pour garantir l'intégrité des données.
+| Niveau | Table | Contrainte | Effet |
+|--------|-------|------------|-------|
+| 1 | `feeds` | `UNIQUE(url)` | 1 flux RSS par URL |
+| 2 | `articles` | `UNIQUE(hash)` | 1 article par URL (hash SHA256) |
+| 3 | `links` | `UNIQUE(user_id, article_id)` | 1 sauvegarde par user+article |
+| 4 | `subscriptions` | `UNIQUE(user_id, feed_id)` | 1 abonnement par user+feed |
 
-### Niveau 1 : Feeds (par URL)
+### Exemple
 
-```sql
--- Contrainte UNIQUE sur feeds.url
-CREATE UNIQUE INDEX ON feeds(url);
 ```
+Alice sauve https://blog.com/article-x
+  → articles.id = 1 (nouveau, hash = sha256(url))
+  → links.id = 100 (Alice ↔ article 1)
 
-**Résultat** : Impossible d'avoir 2 feeds avec la même URL RSS.
+Bob sauve https://blog.com/article-x
+  → articles.id = 1 (existant via hash)
+  → links.id = 101 (Bob ↔ article 1)
 
-### Niveau 2 : Articles (par hash)
-
-```sql
--- Contrainte UNIQUE sur articles.hash
-CREATE UNIQUE INDEX ON articles(hash);
+Économie : 1 article en BDD au lieu de 2
 ```
-
-**Algorithme** :
-
-```go
-func getOrCreateArticle(url string) (int64, error) {
-    hash := calculateHash(url)
-    
-    // Tenter de récupérer l'article existant
-    var articleID int64
-    err := db.QueryRow(
-        "SELECT id FROM articles WHERE hash = $1", 
-        hash,
-    ).Scan(&articleID)
-    
-    if err == sql.ErrNoRows {
-        // Article n'existe pas : le créer
-        articleID, err = fetchAndInsertArticle(url, hash)
-    }
-    
-    return articleID, err
-}
-```
-
-**Résultat** : Chaque URL unique = 1 seul article dans la base.
-
-### Niveau 3 : Links (par user + article)
-
-```sql
--- Contrainte UNIQUE sur (user_id, article_id)
-CREATE UNIQUE INDEX ON links(user_id, article_id);
-```
-
-**Résultat** : Un utilisateur ne peut pas sauver 2× le même article.
-
-### Niveau 4 : Subscriptions (par user + feed)
-
-```sql
--- Contrainte UNIQUE sur (user_id, feed_id)
-CREATE UNIQUE INDEX ON subscriptions(user_id, feed_id);
-```
-
-**Résultat** : Un utilisateur ne peut pas s'abonner 2× au même feed.
 
 ---
 
 ## Requêtes SQL courantes
 
-### Récupérer les articles non-lus d'un utilisateur
+### Articles non-lus d'un utilisateur
 
 ```sql
-SELECT 
-    a.id,
-    a.title,
-    a.author,
-    a.image_url,
-    a.reading_time_minutes,
-    l.saved_at,
-    l.reading_progress,
+SELECT
+    a.id, a.title, a.author, a.image_url, a.reading_time_minutes,
+    l.saved_at, l.reading_progress,
     f.original_title AS feed_title
 FROM links l
 JOIN articles a ON l.article_id = a.id
@@ -400,353 +501,117 @@ ORDER BY l.saved_at DESC
 LIMIT 50;
 ```
 
-### Récupérer les articles d'un feed spécifique
+### Abonnements avec compteur non-lus
 
 ```sql
-SELECT 
-    a.id,
-    a.title,
-    a.description,
-    l.is_read,
-    l.saved_at
-FROM links l
-JOIN articles a ON l.article_id = a.id
-WHERE l.user_id = $1
-  AND l.feed_id = $2
-ORDER BY a.published_at DESC;
+SELECT
+    s.id, s.custom_title, s.category, s.created_at,
+    f.id AS feed_id, f.url, f.original_title, f.site_url, f.image_url,
+    COUNT(l.id) FILTER (WHERE l.is_read = FALSE) AS unread_count
+FROM subscriptions s
+JOIN feeds f ON s.feed_id = f.id
+LEFT JOIN links l ON l.feed_id = f.id AND l.user_id = s.user_id
+WHERE s.user_id = $1
+GROUP BY s.id, f.id
+ORDER BY s.created_at DESC;
 ```
 
 ### Recherche full-text
 
 ```sql
-SELECT 
-    a.id,
-    a.title,
-    a.description,
+SELECT
+    a.id, a.title, a.description,
     ts_rank(a.tsv, query) AS rank
 FROM articles a,
      to_tsquery('french', $1) AS query
 WHERE a.tsv @@ query
   AND EXISTS (
-      SELECT 1 FROM links 
+      SELECT 1 FROM links
       WHERE article_id = a.id AND user_id = $2
   )
 ORDER BY rank DESC
 LIMIT 20;
 ```
 
-**Exemple d'utilisation** :
-
-```sql
--- Rechercher "intelligence artificielle"
-EXECUTE search_query('intelligence & artificielle', 'user-uuid');
-```
-
-### Statistiques de lecture
-
-```sql
--- Temps de lecture total cette semaine
-SELECT 
-    SUM(a.reading_time_minutes) AS total_minutes,
-    COUNT(*) AS articles_read
-FROM links l
-JOIN articles a ON l.article_id = a.id
-WHERE l.user_id = $1
-  AND l.is_read = true
-  AND l.updated_at >= NOW() - INTERVAL '7 days';
-```
-
-### Articles populaires (sauvés par le plus d'utilisateurs)
-
-```sql
-SELECT 
-    a.id,
-    a.title,
-    a.url,
-    COUNT(l.id) AS save_count
-FROM articles a
-JOIN links l ON l.article_id = a.id
-WHERE l.saved_at >= NOW() - INTERVAL '30 days'
-GROUP BY a.id
-ORDER BY save_count DESC
-LIMIT 10;
-```
-
-### Feeds les plus actifs d'un utilisateur
-
-```sql
-SELECT 
-    f.id,
-    COALESCE(s.custom_title, f.original_title) AS title,
-    s.custom_icon,
-    COUNT(l.id) AS article_count,
-    COUNT(l.id) FILTER (WHERE l.is_read = false) AS unread_count
-FROM subscriptions s
-JOIN feeds f ON s.feed_id = f.id
-LEFT JOIN links l ON l.feed_id = f.id AND l.user_id = s.user_id
-WHERE s.user_id = $1
-GROUP BY f.id, s.custom_title, f.original_title, s.custom_icon
-ORDER BY article_count DESC;
-```
-
 ---
 
-## Processus de synchronisation
+## Configuration
 
-### Refresh automatique des feeds (Cron job)
+### Variables d'environnement
+
+| Variable | Description | Exemple |
+|----------|-------------|---------|
+| `ENV` | Environnement | `development`, `production` |
+| `PORT` | Port du serveur | `4000` |
+| `DATABASE_URI` | Connection PostgreSQL | `postgres://user:pass@host/db` |
+| `RATE_LIMITER_RPS` | Requêtes/seconde par IP | `2` |
+| `RATE_LIMITER_BURST` | Capacité burst | `4` |
+| `RATE_LIMITER_ENABLED` | Activer le rate limiting | `true` |
+
+### Structure application
 
 ```go
-// À exécuter toutes les heures
-func refreshFeeds() {
-    // 1. Récupérer les feeds actifs non synchronisés récemment
-    feeds := db.Query(`
-        SELECT id, url 
-        FROM feeds 
-        WHERE is_active = true 
-          AND (last_fetched_at IS NULL 
-               OR last_fetched_at < NOW() - INTERVAL '1 hour')
-        LIMIT 100
-    `)
-    
-    for _, feed := range feeds {
-        // 2. Fetch et parse le flux
-        feedData := fetchAndParseFeed(feed.URL)
-        
-        // 3. Pour chaque nouvel item
-        for _, item := range feedData.Items {
-            hash := calculateHash(item.Link)
-            
-            // 4. Vérifier si l'article existe déjà
-            articleID := getOrCreateArticle(item.Link, hash)
-            
-            // 5. Créer des links pour tous les utilisateurs abonnés
-            subscribers := db.Query(`
-                SELECT user_id 
-                FROM subscriptions 
-                WHERE feed_id = $1
-            `, feed.ID)
-            
-            for _, userID := range subscribers {
-                createLinkIfNotExists(userID, articleID, feed.ID)
-            }
-        }
-        
-        // 6. Mettre à jour la date de fetch
-        db.Exec(`
-            UPDATE feeds 
-            SET last_fetched_at = NOW() 
-            WHERE id = $1
-        `, feed.ID)
+type application struct {
+    config   config           // Configuration
+    logger   *jsonlog.Logger  // Logging structuré JSON
+    models   data.Models      // Accès BDD
+    services service.Services // Logique métier
+}
+
+type config struct {
+    port    int
+    env     string
+    db      struct { dsn string }
+    limiter struct {
+        rps     float64
+        burst   int
+        enabled bool
     }
 }
 ```
 
-### Stratégie de refresh
-
-| Type de feed | Fréquence | Raison |
-|--------------|-----------|--------|
-| News (Breaking) | 15 min | Actualité rapide |
-| Blogs Tech | 1 heure | Publications régulières |
-| Blogs perso | 6 heures | Publications espacées |
-| Podcasts | 24 heures | Épisodes hebdomadaires |
-
-**Optimisation** : Adapter la fréquence selon l'activité réelle du feed.
-
 ---
 
-## Cas d'usage
+## Dépendances principales
 
-### Cas 1 : Alice s'abonne à un nouveau feed
-
-```mermaid
-sequenceDiagram
-    Alice->>API: POST /feeds/subscribe {url}
-    API->>DB: SELECT FROM feeds WHERE url = ?
-    alt Feed n'existe pas
-        API->>RSS: Fetch feed XML
-        RSS-->>API: Feed data
-        API->>DB: INSERT INTO feeds
-        DB-->>API: feed_id
-    else Feed existe
-        DB-->>API: feed_id
-    end
-    API->>DB: INSERT INTO subscriptions
-    API->>Worker: Trigger import articles
-    Worker->>RSS: Fetch articles
-    Worker->>DB: INSERT articles & links
-    API-->>Alice: Success
-```
-
-**Résultat** : Alice voit immédiatement le feed, les articles arrivent progressivement.
-
-### Cas 2 : Bob sauve le même article qu'Alice
-
-```
-1. Alice sauve https://blog.com/article-x
-   → articles.id = 1 (nouveau)
-   → links.id = 100 (Alice)
-
-2. Bob sauve https://blog.com/article-x
-   → articles.id = 1 (existant, détecté via hash)
-   → links.id = 101 (Bob)
-```
-
-**Économie** : 1 seul article en DB au lieu de 2.
-
-### Cas 3 : Alice et Bob s'abonnent au même feed
-
-```
-1. Alice s'abonne à "TechCrunch"
-   → feeds.id = 5 (nouveau)
-   → subscriptions.id = 10 (Alice + feed 5)
-
-2. Bob s'abonne à "TechCrunch"
-   → feeds.id = 5 (existant)
-   → subscriptions.id = 11 (Bob + feed 5)
-
-3. Nouvel article publié sur TechCrunch
-   → articles.id = 200 (nouveau)
-   → links.id = 500 (Alice + article 200)
-   → links.id = 501 (Bob + article 200)
-```
-
-**Résultat** : 1 feed, 1 article, 2 links (un par utilisateur).
-
-### Cas 4 : Alice personnalise son feed
-
-```sql
--- Alice renomme "TechCrunch" en "TC" avec un emoji
-UPDATE subscriptions
-SET custom_title = 'TC',
-    custom_icon = '🚀',
-    category = 'Tech'
-WHERE user_id = 'alice-uuid' AND feed_id = 5;
-```
-
-**Résultat** : 
-- Alice voit "🚀 TC" dans sa sidebar
-- Bob voit toujours "TechCrunch" (original_title)
-
-### Cas 5 : Recherche d'articles
-
-```sql
--- Alice cherche "kubernetes docker"
-SELECT a.id, a.title
-FROM articles a
-JOIN links l ON l.article_id = a.id
-WHERE l.user_id = 'alice-uuid'
-  AND a.tsv @@ to_tsquery('french', 'kubernetes & docker')
-ORDER BY ts_rank(a.tsv, to_tsquery('french', 'kubernetes & docker')) DESC;
-```
-
-**Note** : Seuls les articles sauvés par Alice sont recherchés (via JOIN links).
-
----
-
-## Bonnes pratiques
-
-### Performance
-
-1. **Limiter le fetch initial** : N'importer que les 20 derniers articles d'un nouveau feed
-2. **Index sur hash** : Permet une recherche O(1) pour la déduplication
-3. **Pagination** : Toujours paginer les requêtes d'articles (LIMIT + OFFSET)
-4. **Cache Redis** : Mettre en cache les feeds populaires
-
-### Gestion des erreurs
-
-```go
-// Exemple de gestion d'erreur lors du fetch
-func fetchAndInsertArticle(url, hash string) (int64, error) {
-    resp, err := http.Get(url)
-    if err != nil {
-        // Log mais ne pas bloquer (article inaccessible)
-        log.Printf("Failed to fetch %s: %v", url, err)
-        return 0, ErrArticleUnavailable
-    }
-    
-    article, err := parseArticle(resp.Body)
-    if err != nil {
-        // Parser a échoué (HTML invalide)
-        log.Printf("Failed to parse %s: %v", url, err)
-        return 0, ErrParsingFailed
-    }
-    
-    // Insertion avec retry en cas de conflit
-    return insertArticleWithRetry(article)
-}
-```
-
-### Sécurité
-
-1. **Validation des URLs** : Vérifier que l'URL est bien un feed RSS/Atom
-2. **Rate limiting** : Limiter le nombre de feeds ajoutés par utilisateur/jour
-3. **Sanitization** : Nettoyer le HTML avant stockage (protection XSS)
-4. **Timeout** : Limiter le temps de fetch à 10 secondes
-
-### Maintenance
-
-```sql
--- Nettoyer les articles orphelins (aucun link)
-DELETE FROM articles
-WHERE id NOT IN (SELECT DISTINCT article_id FROM links)
-  AND created_at < NOW() - INTERVAL '90 days';
-
--- Désactiver les feeds inactifs
-UPDATE feeds
-SET is_active = false
-WHERE last_fetched_at < NOW() - INTERVAL '30 days'
-  AND id NOT IN (
-      SELECT feed_id FROM subscriptions
-  );
-```
-
----
-
-## Glossaire
-
-| Terme | Définition |
-|-------|------------|
-| **Feed** | Flux RSS/Atom (source d'articles) |
-| **Subscription** | Abonnement d'un utilisateur à un feed |
-| **Article** | Contenu d'un article (partagé) |
-| **Link** | Relation entre un user et un article (personnel) |
-| **Hash** | Empreinte SHA256 de l'URL pour déduplication |
-| **Slug** | Identifiant court pour URLs (ex: `/a/abc123`) |
-| **TSV** | Text Search Vector (index full-text PostgreSQL) |
+| Package | Version | Usage |
+|---------|---------|-------|
+| `github.com/julienschmidt/httprouter` | - | Routing HTTP |
+| `github.com/lib/pq` | - | Driver PostgreSQL |
+| `github.com/google/uuid` | - | Génération UUID |
+| `golang.org/x/crypto/bcrypt` | - | Hachage mots de passe |
+| `golang.org/x/time/rate` | - | Rate limiting |
+| `github.com/mmcdole/gofeed` | - | Parsing RSS/Atom |
+| `codeberg.org/readeck/go-readability/v2` | - | Extraction contenu web |
+| `github.com/microcosm-cc/bluemonday` | - | Sanitization HTML |
+| `github.com/joho/godotenv` | - | Chargement .env |
 
 ---
 
 ## Évolutions futures
 
-### Phase 1 (MVP)
-- ✅ Import RSS basique
-- ✅ Déduplication
-- ✅ Recherche full-text
-- ✅ Labels et highlights
+### En cours
 
-### Phase 2
-- 📧 Newsletters par email (forward to save)
-- 🔔 Notifications push (nouveaux articles)
-- 📱 Apps mobiles natives
-- 🎨 Personnalisation avancée (thèmes, polices)
+- [ ] Endpoints articles (listing, détail, modification état)
+- [ ] Suppression d'abonnements
+- [ ] Labels et highlights dans l'API
 
-### Phase 3
-- 🤖 Résumés IA des articles
-- 🔗 Partage public de collections
-- 📊 Analytics de lecture
-- 🌐 Support multi-langues
+### Planifiées
+
+- [ ] Cron job de synchronisation des feeds
+- [ ] Sauvegarde manuelle d'articles (hors RSS)
+- [ ] Recherche full-text via API
+- [ ] Notifications nouveaux articles
+- [ ] Export OPML
+
+### À considérer
+
+- [ ] Support newsletters (forward email)
+- [ ] Apps mobiles natives
+- [ ] Résumés IA des articles
+- [ ] Partage public de collections
 
 ---
 
-## Support
-
-Pour toute question sur l'architecture :
-- 📖 Lire cette documentation
-- 🐛 Ouvrir une issue GitHub
-- 💬 Rejoindre le Discord du projet
-
-**Auteur** : [Votre nom]  
-**Dernière mise à jour** : Janvier 2025  
-**Version** : 1.0.0
-
-[![](https://mermaid.ink/img/pako:eNp1Vdly4jgU_RWV56FfnHRYA9R0TzlAOiQECEsnHUNRii2DJl4YLalkTP6lH4fv4MdGlgyWUt15SKF77zn36C5yanmJj6yWtSJwswbTzjwG4s9xZwyHmEKGOAE04RFiYDbug_FksgAnJ1_BRZod_f3u7_1P4MOYggAhn_71rgjU_4ssdDtI4i1ou5eIeWvwcCtQXAYv9KAhx1vQccf7ncc3-x1BRMYssQ_QK6YMxmyhU7elim6qWIc3h8RdydYlRAjfgkt3jFjCSSzokLT9-UQ-f-3FLzAUzOI2n8l-RxHkCx0-vNmCb-4IEipwmeIs0GFJZEj4JiVcpTJOk3BlStCNGXHP7b4yAjFBINrvGPSTON7vEJXKGGYhsgHFDC05CW2AI7iSP43UPZn62u0NJt3xFPQG06GqvySRwITgFY5huPxIKUOOtDYIIWXLICujKDc0q3wt89y4wyeGYnxsSR7TUV4dcCNNfUMY5U_UI3jDcBLnAkVdBY194FOaPE5FiZXeL4NZv2-YsZfE0moI7Mt8t2kv2iSEiW5BwrAX5tXMB80cyttiKAfaeFDuefv_FE5XDDwxIaI_Cx0tp3XojgQWeGv4D0dAlDfKJjvbED3dUCocuW0YejwUidaQrpU6BMJP2Rblmg3YSMLu0isRrTYAKVC2aodLmhe7K6SNjUXKw0WhJcWHfbor6jHJl1SUWvSbFyp_pXAiFU5TOc2eLFWxA1NjB2ZuP1npC5glwDHPtL0gT9QevxSCpsdV-e4OEGPJm4i7mt72JfS4PAy9sqVSag7tdyns3phBYyzk2GdtsIFajqMmQWUbxDYQBTk16O8l_cNxJ4rq5mFjFaBjHqTpR9rH8bPezU02QNk2mJ38UXTy0Z08443qhHpsKeQv-91Cj5TNcxzjxqFI9WHbCqXqxoftAzTkq1_c1HGkbOcidTgjiMoZPw7dY-5Up5lxyvHa0z40TEpw252NOs60qz1dk-7044P0ZTC8N2Wpt3-g2yh7CxFwQIDDsPUHKgW1INA9l7knCDzfL-ueQe7xGqjuNXXP9RETNL2q7un_1nP_W4_jGC7LFp9c7FstRjiyrQiRCGZHK81Ac4utUYTmVkv89CF5nlvz-F1gNjB-TJLoACMJX62tVgBDKk5844sPdgdD8TEvQlDsI9JOeMysVqlerkgSq5Var1arWq2cNqu181qjVK9XGrWabb1ZrZNS46x62qyVzxv1ZvOsWanU323rX5m3clpqNEq1erlWbpxVzkvl9_8Be4GelQ?type=png)](https://mermaid.live/edit#pako:eNp1Vdly4jgU_RWV56FfnHRYA9R0TzlAOiQECEsnHUNRii2DJl4YLalkTP6lH4fv4MdGlgyWUt15SKF77zn36C5yanmJj6yWtSJwswbTzjwG4s9xZwyHmEKGOAE04RFiYDbug_FksgAnJ1_BRZod_f3u7_1P4MOYggAhn_71rgjU_4ssdDtI4i1ou5eIeWvwcCtQXAYv9KAhx1vQccf7ncc3-x1BRMYssQ_QK6YMxmyhU7elim6qWIc3h8RdydYlRAjfgkt3jFjCSSzokLT9-UQ-f-3FLzAUzOI2n8l-RxHkCx0-vNmCb-4IEipwmeIs0GFJZEj4JiVcpTJOk3BlStCNGXHP7b4yAjFBINrvGPSTON7vEJXKGGYhsgHFDC05CW2AI7iSP43UPZn62u0NJt3xFPQG06GqvySRwITgFY5huPxIKUOOtDYIIWXLICujKDc0q3wt89y4wyeGYnxsSR7TUV4dcCNNfUMY5U_UI3jDcBLnAkVdBY194FOaPE5FiZXeL4NZv2-YsZfE0moI7Mt8t2kv2iSEiW5BwrAX5tXMB80cyttiKAfaeFDuefv_FE5XDDwxIaI_Cx0tp3XojgQWeGv4D0dAlDfKJjvbED3dUCocuW0YejwUidaQrpU6BMJP2Rblmg3YSMLu0isRrTYAKVC2aodLmhe7K6SNjUXKw0WhJcWHfbor6jHJl1SUWvSbFyp_pXAiFU5TOc2eLFWxA1NjB2ZuP1npC5glwDHPtL0gT9QevxSCpsdV-e4OEGPJm4i7mt72JfS4PAy9sqVSag7tdyns3phBYyzk2GdtsIFajqMmQWUbxDYQBTk16O8l_cNxJ4rq5mFjFaBjHqTpR9rH8bPezU02QNk2mJ38UXTy0Z08443qhHpsKeQv-91Cj5TNcxzjxqFI9WHbCqXqxoftAzTkq1_c1HGkbOcidTgjiMoZPw7dY-5Up5lxyvHa0z40TEpw252NOs60qz1dk-7044P0ZTC8N2Wpt3-g2yh7CxFwQIDDsPUHKgW1INA9l7knCDzfL-ueQe7xGqjuNXXP9RETNL2q7un_1nP_W4_jGC7LFp9c7FstRjiyrQiRCGZHK81Ac4utUYTmVkv89CF5nlvz-F1gNjB-TJLoACMJX62tVgBDKk5844sPdgdD8TEvQlDsI9JOeMysVqlerkgSq5Var1arWq2cNqu181qjVK9XGrWabb1ZrZNS46x62qyVzxv1ZvOsWanU323rX5m3clpqNEq1erlWbpxVzkvl9_8Be4GelQ)
+**Dernière mise à jour** : Janvier 2026
+**Version** : 2.0.0

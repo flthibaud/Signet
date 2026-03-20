@@ -74,6 +74,16 @@ func (app *application) createAuthenticationTokenHandler(w http.ResponseWriter, 
 		return
 	}
 
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token.Plaintext,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(time.Until(token.Expiry).Seconds()),
+	})
+
 	// Encode the token to JSON and send it in the response along with a 201 Created
 	// status code.
 	err = app.writeJSON(w, http.StatusCreated, envelope{"authentication_token": token}, nil)

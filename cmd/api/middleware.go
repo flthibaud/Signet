@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"strings"
@@ -74,28 +76,30 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 
 	// Importantly, unlock the mutex when the cleanup is complete.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			app.serverErrorResponse(w, r, err)
-			return
-		}
-		mu.Lock()
-		if _, found := clients[ip]; !found {
-			// Create and add a new client struct to the map if it doesn't already exist.
-			clients[ip] = &client{
-				limiter: rate.NewLimiter(rate.Limit(app.config.limiter.rps), app.config.limiter.burst),
+		if app.config.limiter.enabled {
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				app.serverErrorResponse(w, r, err)
+				return
 			}
-		}
-		// Update the last seen time for the client.
-		clients[ip].lastSeen = time.Now()
+			mu.Lock()
+			if _, found := clients[ip]; !found {
+				// Create and add a new client struct to the map if it doesn't already exist.
+				clients[ip] = &client{
+					limiter: rate.NewLimiter(rate.Limit(app.config.limiter.rps), app.config.limiter.burst),
+				}
+			}
+			// Update the last seen time for the client.
+			clients[ip].lastSeen = time.Now()
 
-		if !clients[ip].limiter.Allow() {
+			if !clients[ip].limiter.Allow() {
+				mu.Unlock()
+				app.rateLimitExceededResponse(w, r)
+				return
+			}
+
 			mu.Unlock()
-			app.rateLimitExceededResponse(w, r)
-			return
 		}
-
-		mu.Unlock()
 
 		next.ServeHTTP(w, r)
 	})
@@ -103,38 +107,31 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 
 func (app *application) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Add the "Vary: Authorization" header to the response. This indicates to any
-		// caches that the response may vary based on the value of the Authorization
-		// header in the request.
-		w.Header().Add("Vary", "Authorization")
+		// Try to get the token from the Authorization header first, then fall back
+		// to the auth_token cookie.
+		var token string
 
-		// Retrieve the value of the Authorization header from the request. This will
-		// return the empty string "" if there is no such header found.
 		authorizationHeader := r.Header.Get("Authorization")
 
-		// If there is no Authorization header found, use the contextSetUser() helper
-		// that we just made to add the AnonymousUser to the request context. Then we
-		// call the next handler in the chain and return without executing any of the
-		// code below.
-		if authorizationHeader == "" {
-			r = app.contextSetUser(r, data.AnonymousUser)
-			next.ServeHTTP(w, r)
-			return
-		}
+		switch {
+		case authorizationHeader != "":
+			w.Header().Add("Vary", "Authorization")
+			headerParts := strings.Split(authorizationHeader, " ")
+			if len(headerParts) != 2 || headerParts[0] != "Bearer" {
+				app.invalidAuthenticationTokenResponse(w, r)
+				return
+			}
+			token = headerParts[1]
 
-		// Otherwise, we expect the value of the Authorization header to be in the format
-		// "Bearer <token>". We try to split this into its constituent parts, and if the
-		// header isn't in the expected format we return a 401 Unauthorized response
-		// using the invalidAuthenticationTokenResponse() helper (which we will create
-		// in a moment).
-		headerParts := strings.Split(authorizationHeader, " ")
-		if len(headerParts) != 2 || headerParts[0] != "Bearer" {
-			app.invalidAuthenticationTokenResponse(w, r)
-			return
+		default:
+			cookie, err := r.Cookie("auth_token")
+			if err != nil {
+				r = app.contextSetUser(r, data.AnonymousUser)
+				next.ServeHTTP(w, r)
+				return
+			}
+			token = cookie.Value
 		}
-
-		// Extract the actual authentication token from the header parts.
-		token := headerParts[1]
 
 		// Validate the token to make sure it is in a sensible format.
 		v := validator.New()
@@ -169,4 +166,45 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		// Call the next handler in the chain.
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (app *application) serveIndex(fsys fs.FS, path string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f, err := fsys.Open(path)
+		if err != nil {
+			app.serverErrorResponse(w, r, err)
+			return
+		}
+		defer f.Close()
+
+		stat, err := f.Stat()
+		if err != nil {
+			app.serverErrorResponse(w, r, err)
+			return
+		}
+
+		http.ServeContent(w, r, "index.html", stat.ModTime(), f.(io.ReadSeeker))
+	})
+}
+
+func (app *application) requireAuth(next http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := app.contextGetUser(r)
+		if user.IsAnonymous() {
+			http.Redirect(w, r, "/auth", http.StatusSeeOther)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}
+}
+
+func (app *application) requireGuest(next http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := app.contextGetUser(r)
+		if !user.IsAnonymous() {
+			http.Redirect(w, r, "/app", http.StatusSeeOther)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}
 }

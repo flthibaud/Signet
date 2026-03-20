@@ -19,9 +19,9 @@ type Article struct {
 	ReadingTime  float64   `json:"reading_time_minutes"`
 	OriginalHTML string    `json:"-"`
 	TextContent  string    `json:"text_content"`
-	CreatedAt    time.Time `json:"-"`
-	PublishedAt  time.Time `json:"-"`
-	UpdatedAt    time.Time `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
+	PublishedAt  time.Time `json:"published_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type ArticleModel struct {
@@ -103,7 +103,7 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 	var article Article
 	query := `
-		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at
+		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at, updated_at
 		FROM articles
 		WHERE id = $1
 	`
@@ -122,6 +122,7 @@ func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 		&article.TextContent,
 		&article.PublishedAt,
 		&article.CreatedAt,
+		&article.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
