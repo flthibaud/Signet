@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
-import { Clock, Rss } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Clock, Rss, Loader2 } from "lucide-react";
 
 interface LinkData {
+  id: number;
   title: string;
   description: string;
   image_url: string;
@@ -9,6 +10,13 @@ interface LinkData {
   feed_title: string;
   reading_time_minutes: number;
   published_at: string;
+}
+
+interface Metadata {
+  current_page: number;
+  page_size: number;
+  total_records: number;
+  total_pages: number;
 }
 
 const formatDate = (dateStr: string) => {
@@ -30,18 +38,51 @@ const formatDate = (dateStr: string) => {
 
 export const Link = () => {
   const [links, setLinks] = useState<LinkData[]>([]);
+  const [metadata, setMetadata] = useState<Metadata | null>(null);
+  const [loading, setLoading] = useState(false);
+  const loaderRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef(1);
+
+  const hasMore = metadata ? metadata.current_page < metadata.total_pages : true;
+
+  const fetchLinks = useCallback(async (page: number) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/v1/links?page=${page}`);
+      const data = await res.json();
+      setLinks((prev) => page === 1 ? (data.links ?? []) : [...prev, ...(data.links ?? [])]);
+      setMetadata(data.metadata);
+      pageRef.current = page;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch("/v1/links?page=1")
-      .then((res) => res.json())
-      .then((data) => setLinks(data.links ?? []));
-  }, []);
+    fetchLinks(1);
+  }, [fetchLinks]);
+
+  useEffect(() => {
+    if (!loaderRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loading && hasMore) {
+          fetchLinks(pageRef.current + 1);
+        }
+      },
+      { rootMargin: "200px" },
+    );
+
+    observer.observe(loaderRef.current);
+    return () => observer.disconnect();
+  }, [loading, hasMore, fetchLinks]);
 
   return (
     <div className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
-      {links.map((link, i) => (
+      {links.map((link) => (
         <article
-          key={i}
+          key={link.id}
           className="flex gap-4 py-4 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
         >
           {link.image_url && (
@@ -89,6 +130,10 @@ export const Link = () => {
           </div>
         </article>
       ))}
+
+      <div ref={loaderRef} className="py-6 flex justify-center">
+        {loading && <Loader2 size={20} className="animate-spin text-gray-400" />}
+      </div>
     </div>
   );
 };
