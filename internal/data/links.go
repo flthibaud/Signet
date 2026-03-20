@@ -33,22 +33,17 @@ type Link struct {
 // LinkWithArticle combines a user's link state with the article content.
 type LinkWithArticle struct {
 	Link
-	Title       string  `json:"title"`
-	Description string  `json:"description,omitempty"`
-	Author      string  `json:"author"`
-	ImageURL    string  `json:"image_url,omitempty"`
-	ReadingTime float64 `json:"reading_time_minutes"`
-	FeedTitle   *string `json:"feed_title,omitempty"`
+	Title       string    `json:"title"`
+	Description string    `json:"description,omitempty"`
+	Author      string    `json:"author"`
+	ImageURL    string    `json:"image_url,omitempty"`
+	ReadingTime float64   `json:"reading_time_minutes"`
+	FeedTitle   *string   `json:"feed_title,omitempty"`
+	PublishedAt time.Time `json:"published_at"`
 }
 
 type LinkModel struct {
 	DB *sql.DB
-}
-
-type ImportStats struct {
-	TotalFound int64 `json:"total_found"`
-	Inserted   int64 `json:"new_inserted"`
-	Skipped    int64 `json:"duplicates_skipped"`
 }
 
 func (m LinkModel) Insert(ctx context.Context, link *Link) error {
@@ -78,8 +73,8 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 	query := `
 		SELECT count(*) OVER(),
 			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
-			l.saved_at, l.updated_at,
-			a.title, a.description, a.author, a.image_url, a.reading_time_minutes,
+			l.saved_at, l.created_at, l.updated_at,
+			a.title, a.description, a.author, a.image_url, a.reading_time_minutes, a.published_at,
 			f.original_title
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
@@ -109,12 +104,14 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 			&link.IsRead,
 			&link.IsStarred,
 			&link.SavedAt,
+			&link.CreatedAt,
 			&link.UpdatedAt,
 			&link.Title,
 			&link.Description,
 			&link.Author,
 			&link.ImageURL,
 			&link.ReadingTime,
+			&link.PublishedAt,
 			&link.FeedTitle,
 		)
 		if err != nil {

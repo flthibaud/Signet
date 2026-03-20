@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Clock, Rss } from "lucide-react";
 
 interface LinkData {
   title: string;
@@ -7,7 +8,25 @@ interface LinkData {
   saved_at: string;
   feed_title: string;
   reading_time_minutes: number;
+  published_at: string;
 }
+
+const formatDate = (dateStr: string) => {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "Aujourd'hui";
+  if (diffDays === 1) return "Hier";
+  if (diffDays < 7) return `Il y a ${diffDays} jours`;
+
+  return date.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "short",
+    year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+  });
+};
 
 export const Link = () => {
   const [links, setLinks] = useState<LinkData[]>([]);
@@ -19,40 +38,57 @@ export const Link = () => {
   }, []);
 
   return (
-    <>
+    <div className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
       {links.map((link, i) => (
-        <div key={i} className="flex gap-4 mb-6 last:mb-0 cursor-pointer">
-          <img src={link.image_url} alt={link.title} className="w-24 h-24 rounded-sm" />
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-row items-center justify-between">
-              <h3 className="text-xl font-medium text-gray-900 dark:text-white">
+        <article
+          key={i}
+          className="flex gap-4 py-4 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
+        >
+          {link.image_url && (
+            <img
+              src={link.image_url}
+              alt=""
+              className="w-28 h-20 rounded-lg object-cover shrink-0 bg-gray-100 dark:bg-gray-700"
+              loading="lazy"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          )}
+
+          <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+            <div className="flex items-start justify-between gap-4">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white leading-snug line-clamp-2">
                 {link.title}
               </h3>
-              <span className="text-sm font-medium text-gray-900 dark:text-white">
-                {new Date(link.saved_at).toLocaleDateString("fr-FR", {
-                  day: "2-digit",
-                  month: "long",
-                  year: "numeric",
-                })}
-              </span>
+              <time className="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap mt-0.5 shrink-0">
+                {formatDate(link.saved_at)}
+              </time>
             </div>
-            <p className="text-base text-ellipsis text-gray-500 dark:text-gray-400 whitespace-nowrap overflow-hidden w-200">
-              {link.description}
-            </p>
-            <div className="flex gap-2">
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                {link.feed_title}
-              </span>
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                {" "}- {Math.round(link.reading_time_minutes)} minutes
-              </span>
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                {" "}- tags
-              </span>
+
+            {link.description && (
+              <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 leading-relaxed">
+                {link.description}
+              </p>
+            )}
+
+            <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 dark:text-gray-500">
+              {link.feed_title && (
+                <span className="flex items-center gap-1">
+                  <Rss size={12} />
+                  {link.feed_title}
+                </span>
+              )}
+              {link.reading_time_minutes > 0 && (
+                <span className="flex items-center gap-1">
+                  <Clock size={12} />
+                  {Math.round(link.reading_time_minutes)} min
+                </span>
+              )}
             </div>
           </div>
-        </div>
+        </article>
       ))}
-    </>
+    </div>
   );
 };
