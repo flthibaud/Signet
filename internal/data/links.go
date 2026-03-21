@@ -42,6 +42,18 @@ type LinkWithArticle struct {
 	PublishedAt time.Time `json:"published_at"`
 }
 
+// LinkDetail is used for the single article detail view, includes text content.
+type LinkDetail struct {
+	Link
+	Title       string    `json:"title"`
+	Author      string    `json:"author"`
+	ImageURL    string    `json:"image_url,omitempty"`
+	ReadingTime float64   `json:"reading_time_minutes"`
+	TextContent string    `json:"text_content"`
+	FeedTitle   *string   `json:"feed_title,omitempty"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
 type LinkModel struct {
 	DB *sql.DB
 }
@@ -81,7 +93,7 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 		LEFT JOIN feeds f ON l.feed_id = f.id
 		WHERE l.user_id = $1
 			AND l.archived_at IS NULL
-		ORDER BY l.saved_at DESC
+		ORDER BY a.published_at DESC
 		LIMIT $2 OFFSET $3`
 
 	rows, err := m.DB.QueryContext(ctx, query, userID, limit, offset)
@@ -128,8 +140,46 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 	return links, totalRecords, nil
 }
 
-func (m LinkModel) Get(ctx context.Context, id int64) (*Link, error) {
-	return nil, nil
+func (m LinkModel) GetByID(ctx context.Context, id int64, userID uuid.UUID) (*LinkDetail, error) {
+	query := `
+		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
+			l.saved_at, l.created_at, l.updated_at,
+			a.title, a.author, a.image_url, a.reading_time_minutes,
+			a.text_content, a.published_at,
+			f.original_title
+		FROM links l
+		JOIN articles a ON l.article_id = a.id
+		LEFT JOIN feeds f ON l.feed_id = f.id
+		WHERE l.id = $1 AND l.user_id = $2`
+
+	var link LinkDetail
+	err := m.DB.QueryRowContext(ctx, query, id, userID).Scan(
+		&link.ID,
+		&link.ArticleID,
+		&link.Slug,
+		&link.FeedID,
+		&link.IsRead,
+		&link.IsStarred,
+		&link.SavedAt,
+		&link.CreatedAt,
+		&link.UpdatedAt,
+		&link.Title,
+		&link.Author,
+		&link.ImageURL,
+		&link.ReadingTime,
+		&link.TextContent,
+		&link.PublishedAt,
+		&link.FeedTitle,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("link not found")
+		}
+		return nil, err
+	}
+
+	link.UserID = userID
+	return &link, nil
 }
 
 func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64) (bool, error) {

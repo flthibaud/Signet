@@ -15,6 +15,7 @@ import (
 	readability "codeberg.org/readeck/go-readability/v2"
 	"github.com/flthibaud/omnivore-go/internal/data"
 	"github.com/google/uuid"
+	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 )
@@ -145,6 +146,7 @@ func (s *FeedService) ImportArticles(ctx context.Context, feedID int64, userID u
 // createArticleFromItem crée un article depuis un RSS item
 func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash string) (*data.Article, error) {
 	p := bluemonday.UGCPolicy()
+	strip := bluemonday.StrictPolicy()
 
 	parsed, err := s.fetchWithReadability(item.Link)
 
@@ -153,11 +155,11 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "" {
 		title = item.Title
 		originalHTML = p.Sanitize(item.Content)
-		textContent = p.Sanitize(item.Description)
+		textContent, _ = htmltomarkdown.ConvertString(item.Content)
 	} else {
 		title = parsed.Title()
 		originalHTML = renderToValidUTF8(parsed.RenderHTML)
-		textContent = renderToValidUTF8(parsed.RenderText)
+		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
 	}
 
 	// Crée l'article
@@ -165,7 +167,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		Url:          item.Link,
 		Hash:         hash,
 		Title:        title,
-		Description:  item.Description,
+		Description:  strip.Sanitize(item.Description),
 		Author:       getAuthor(item),
 		ImageURL:     item.Image.URL,
 		PageType:     "article",

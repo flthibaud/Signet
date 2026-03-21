@@ -18,3 +18,9 @@ export interface LinksResponse {
     total_pages: number;
   };
 }
+
+export interface Heading {
+  id: string;
+  text: string;
+  level: number;
+}

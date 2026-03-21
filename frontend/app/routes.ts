@@ -8,5 +8,6 @@ export default [
     route("app", "routes/dashboard.links.tsx"),
     route("app/feed", "routes/dashboard.feed.tsx"),
     route("app/library", "routes/dashboard.library.tsx"),
+    route("app/read/:id", "routes/dashboard.read.tsx"),
   ]),
 ] satisfies RouteConfig;

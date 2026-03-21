@@ -26,13 +26,15 @@ func (app *application) routes() http.Handler {
 	// Subscriptions
 	router.HandlerFunc(http.MethodGet, "/v1/subscriptions", app.listSubscriptionsHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/subscriptions", app.createSubscriptionHandler)
-	// router.HandlerFunc(http.MethodDelete, "/v1/subscriptions/:id", app.deleteSubscriptionHandler)
 
 	// Articles d'un feed
 	// router.HandlerFunc(http.MethodGet, "/v1/subscriptions/:id/articles", app.listSubscriptionArticlesHandler)
 
 	// Liste des articles (tous les articles de tous les feeds, triés par date de publication)
 	router.HandlerFunc(http.MethodGet, "/v1/links", app.listLinksHandler)
+
+	// Recuperer le contenu d'un article
+	router.HandlerFunc(http.MethodGet, "/v1/links/:id", app.getLinkHandler)
 
 	// Serve embedded frontend (React Router SPA build)
 	distFS, err := fs.Sub(omnivore.FrontendDist, "frontend/build/client")

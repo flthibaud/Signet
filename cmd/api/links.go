@@ -25,3 +25,23 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 		app.serverErrorResponse(w, r, err)
 	}
 }
+
+func (app *application) getLinkHandler(w http.ResponseWriter, r *http.Request) {
+	user := app.contextGetUser(r)
+	id, err := app.readIDParam(r)
+	if err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
+
+	link, err := app.models.Links.GetByID(r.Context(), id, user.ID)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+		return
+	}
+
+	err = app.writeJSON(w, http.StatusOK, envelope{"link": link}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
+}
