@@ -17,6 +17,7 @@ import (
 	"github.com/flthibaud/omnivore-go/internal/data"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
+	"golang.org/x/net/html"
 )
 
 var (
@@ -60,11 +61,16 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 	}
 
 	// 3. Extrait les métadonnées
+	imageURL := getFeedImageURL(parsedFeed)
+	if imageURL == "" && parsedFeed.Link != "" {
+		imageURL = fetchFaviconURL(s.client, parsedFeed.Link)
+	}
+
 	feed := &data.Feed{
 		Url:           feedURL,
 		Title:         parsedFeed.Title,
 		SiteUrl:       parsedFeed.Link,
-		ImageUrl:      getFeedImageURL(parsedFeed),
+		ImageUrl:      imageURL,
 		LastFetchedAt: time.Now(),
 		IsActive:      true,
 		CreatedAt:     time.Now(),
@@ -250,6 +256,67 @@ func hashURL(url string) string {
 func getFeedImageURL(feed *gofeed.Feed) string {
 	if feed.Image != nil {
 		return feed.Image.URL
+	}
+	return ""
+}
+
+// fetchFaviconURL tente de récupérer l'URL du favicon d'un site.
+// Cherche d'abord un <link rel="icon"> dans le HTML, sinon fallback sur /favicon.ico.
+func fetchFaviconURL(client *http.Client, siteURL string) string {
+	parsed, err := url.Parse(siteURL)
+	if err != nil {
+		return ""
+	}
+
+	fallback := parsed.Scheme + "://" + parsed.Host + "/favicon.ico"
+
+	resp, err := client.Get(siteURL)
+	if err != nil {
+		return fallback
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fallback
+	}
+
+	doc, err := html.Parse(resp.Body)
+	if err != nil {
+		return fallback
+	}
+
+	if href := findIconLink(doc); href != "" {
+		// Résout les URLs relatives
+		ref, err := url.Parse(href)
+		if err != nil {
+			return href
+		}
+		return parsed.ResolveReference(ref).String()
+	}
+
+	return fallback
+}
+
+// findIconLink parcourt le HTML pour trouver un <link rel="icon"> ou <link rel="shortcut icon">.
+func findIconLink(n *html.Node) string {
+	if n.Type == html.ElementNode && n.DataAtom.String() == "link" {
+		var rel, href string
+		for _, attr := range n.Attr {
+			switch attr.Key {
+			case "rel":
+				rel = strings.ToLower(attr.Val)
+			case "href":
+				href = attr.Val
+			}
+		}
+		if href != "" && (rel == "icon" || rel == "shortcut icon" || rel == "apple-touch-icon") {
+			return href
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if result := findIconLink(c); result != "" {
+			return result
+		}
 	}
 	return ""
 }

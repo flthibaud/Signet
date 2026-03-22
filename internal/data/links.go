@@ -86,7 +86,7 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 		SELECT count(*) OVER(),
 			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
 			l.saved_at, l.created_at, l.updated_at,
-			a.title, a.description, a.author, a.image_url, a.reading_time_minutes, a.published_at,
+			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, a.published_at,
 			f.original_title
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
