@@ -198,6 +198,38 @@ func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64
 	return exists, nil
 }
 
+// BulkInsertForArticle creates links for multiple users in a single query.
+// Uses ON CONFLICT DO NOTHING to skip users who already have this article.
+func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID, articleID int64, feedID int64, baseSlug string) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+
+	query := `
+		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
+		VALUES `
+
+	args := []any{}
+	for i, uid := range userIDs {
+		if i > 0 {
+			query += ", "
+		}
+		slug := baseSlug
+		if i > 0 {
+			slug = fmt.Sprintf("%s-%d", baseSlug, i)
+		}
+		paramBase := i * 5
+		query += fmt.Sprintf("($%d, $%d, $%d, $%d, NOW(), NOW())",
+			paramBase+1, paramBase+2, paramBase+3, paramBase+4)
+		args = append(args, uid, articleID, feedID, slug)
+	}
+
+	query += " ON CONFLICT (user_id, article_id) DO NOTHING"
+
+	_, err := m.DB.ExecContext(ctx, query, args...)
+	return err
+}
+
 func (m LinkModel) Update(ctx context.Context, link *Link) error {
 	return nil
 }

@@ -13,9 +13,8 @@ import (
 	"time"
 
 	readability "codeberg.org/readeck/go-readability/v2"
-	"github.com/flthibaud/omnivore-go/internal/data"
-	"github.com/google/uuid"
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
+	"github.com/flthibaud/omnivore-go/internal/data"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 )
@@ -65,7 +64,7 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 		Url:           feedURL,
 		Title:         parsedFeed.Title,
 		SiteUrl:       parsedFeed.Link,
-		ImageUrl:      getImageURL(parsedFeed),
+		ImageUrl:      getFeedImageURL(parsedFeed),
 		LastFetchedAt: time.Now(),
 		IsActive:      true,
 		CreatedAt:     time.Now(),
@@ -78,69 +77,6 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 	}
 
 	return feed, nil
-}
-
-// ImportArticles importe les articles d'un feed pour un user
-func (s *FeedService) ImportArticles(ctx context.Context, feedID int64, userID uuid.UUID) error {
-	// 1. Récupère le feed
-	feed, err := s.models.Feeds.Get(ctx, feedID)
-	if err != nil {
-		return err
-	}
-
-	// 2. Fetch & parse le RSS avec context
-	req, _ := http.NewRequestWithContext(ctx, "GET", feed.Url, nil)
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	parsedFeed, err := s.parser.Parse(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	// 3. Pour chaque item du feed
-	imported := 0
-	for _, item := range parsedFeed.Items {
-		hash := hashURL(item.Link)
-
-		// Check si article existe déjà
-		article, err := s.models.Articles.GetByHash(ctx, hash)
-		if err != nil && err != data.ErrRecordNotFound {
-			continue
-		}
-
-		// Si article n'existe pas, le créer
-		if article == nil {
-			article, err = s.createArticleFromItem(ctx, item, hash)
-			if err != nil {
-				continue
-			}
-		}
-
-		// Crée le lien pour ce user
-		exists, _ := s.models.Links.Exists(ctx, userID, article.ID)
-		if !exists {
-			slug, _ := s.models.Links.GenerateUniqueSlug(ctx, userID, article.Title)
-
-			link := &data.Link{
-				UserID:    userID,
-				ArticleID: article.ID,
-				FeedID:    &feedID,
-				Slug:      slug,
-			}
-
-			err = s.models.Links.Insert(ctx, link)
-			if err == nil {
-				imported++
-			}
-		}
-	}
-
-	// 4. Met à jour last_fetched_at
-	return s.models.Feeds.UpdateLastFetched(ctx, feedID)
 }
 
 // createArticleFromItem crée un article depuis un RSS item
@@ -169,7 +105,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		Title:        title,
 		Description:  strip.Sanitize(item.Description),
 		Author:       getAuthor(item),
-		ImageURL:     item.Image.URL,
+		ImageURL:     getItemImageURL(item),
 		PageType:     "article",
 		ReadingTime:  0, // @TODO: Calculer le temps de lecture
 		OriginalHTML: originalHTML,
@@ -183,6 +119,96 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 	}
 
 	return article, nil
+}
+
+// ImportArticlesForSubscribers fetches a feed with conditional HTTP headers
+// and distributes new articles to all subscribers via bulk insert.
+func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) error {
+	// 1. Build HTTP request with conditional headers
+	req, err := http.NewRequestWithContext(ctx, "GET", feed.Url, nil)
+	if err != nil {
+		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
+		return err
+	}
+	if feed.HttpEtag != "" {
+		req.Header.Set("If-None-Match", feed.HttpEtag)
+	}
+	if feed.HttpLastModified != "" {
+		req.Header.Set("If-Modified-Since", feed.HttpLastModified)
+	}
+
+	// 2. Execute request
+	resp, err := s.client.Do(req)
+	if err != nil {
+		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
+		return err
+	}
+	defer resp.Body.Close()
+
+	// 3. Handle 304 Not Modified
+	if resp.StatusCode == http.StatusNotModified {
+		return s.models.Feeds.ReleaseFeed(ctx, feed.ID, feed.HttpEtag, feed.HttpLastModified)
+	}
+
+	// 4. Handle error status codes
+	if resp.StatusCode != http.StatusOK {
+		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
+		return fmt.Errorf("feed %d returned status %d", feed.ID, resp.StatusCode)
+	}
+
+	// 5. Parse feed
+	parsedFeed, err := s.parser.Parse(resp.Body)
+	if err != nil {
+		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
+		return err
+	}
+
+	// 6. Get HTTP caching headers from response
+	newEtag := resp.Header.Get("ETag")
+	newLastModified := resp.Header.Get("Last-Modified")
+
+	// 7. Get all subscriber IDs
+	subscriberIDs, err := s.models.Subscriptions.GetSubscriberIDs(ctx, feed.ID)
+	if err != nil {
+		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
+		return err
+	}
+
+	// 8. Process each item
+	for _, item := range parsedFeed.Items {
+		hash := hashURL(item.Link)
+
+		// Check if article already exists
+		article, err := s.models.Articles.GetByHash(ctx, hash)
+		if err != nil && err != data.ErrRecordNotFound {
+			continue
+		}
+
+		// Create article if new
+		if article == nil {
+			article, err = s.createArticleFromItem(ctx, item, hash)
+			if err != nil {
+				continue
+			}
+		}
+
+		// Bulk insert links for all subscribers
+		if len(subscriberIDs) > 0 {
+			baseSlug := slugFromHash(hash)
+			_ = s.models.Links.BulkInsertForArticle(ctx, subscriberIDs, article.ID, feed.ID, baseSlug)
+		}
+	}
+
+	// 9. Release feed with updated caching headers
+	return s.models.Feeds.ReleaseFeed(ctx, feed.ID, newEtag, newLastModified)
+}
+
+// slugFromHash generates a URL-friendly slug from an article hash.
+func slugFromHash(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
 }
 
 // fetchWithReadability tente de fetch avec un User-Agent réaliste
@@ -221,9 +247,16 @@ func hashURL(url string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func getImageURL(feed *gofeed.Feed) string {
+func getFeedImageURL(feed *gofeed.Feed) string {
 	if feed.Image != nil {
 		return feed.Image.URL
+	}
+	return ""
+}
+
+func getItemImageURL(item *gofeed.Item) string {
+	if item.Image != nil {
+		return item.Image.URL
 	}
 	return ""
 }

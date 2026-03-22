@@ -4,7 +4,7 @@
 
 - [Objectif](#objectif)
 - [Phase 1 — Scheduler intégré (goroutine + ticker)](#phase-1--scheduler-intégré-goroutine--ticker)
-- [Phase 2 — Worker queue PostgreSQL (évolution future)](#phase-2--worker-queue-postgresql-évolution-future)
+- [Phase 2 — Worker queue PostgreSQL (River)](#phase-2--worker-queue-postgresql-évolution-future)
 
 ---
 
@@ -14,10 +14,11 @@ Aujourd'hui, les articles d'un flux RSS ne sont récupérés qu'au moment de la 
 
 L'objectif est de mettre en place un système qui :
 
-1. Récupère automatiquement les nouveaux articles de chaque flux RSS actif
-2. Distribue les articles à **tous** les abonnés du flux (pas seulement le dernier inscrit)
-3. Respecte les ressources (rate limiting, concurrence contrôlée)
-4. S'intègre proprement au cycle de vie de l'application (graceful shutdown)
+1. Récupère automatiquement les nouveaux articles de chaque flux RSS actif.
+2. Économise la bande passante et respecte les serveurs cibles (Courtoisie HTTP : ETag / Last-Modified).
+3. Distribue les articles à **tous** les abonnés du flux de manière performante.
+4. Respecte les ressources locales (rate limiting, concurrence contrôlée, prévention des requêtes en double).
+5. S'intègre proprement au cycle de vie de l'application (graceful shutdown).
 
 ---
 
@@ -25,7 +26,7 @@ L'objectif est de mettre en place un système qui :
 
 ### Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────┐
 │                      main.go                             │
 │                                                          │
@@ -55,9 +56,16 @@ L'objectif est de mettre en place un système qui :
 
 ### Composants
 
-#### 1. Scheduler (`internal/service/scheduler.go`)
+#### 1. Nouveaux champs dans la base de données
+Pour supporter la courtoisie HTTP et éviter les téléchargements inutiles, la table `feeds` doit inclure :
+- `http_etag` (VARCHAR) : Pour stocker l'identifiant de version du flux.
+- `http_last_modified` (VARCHAR) : Pour stocker la date de dernière modification donnée par le serveur cible.
+- `fetching_since` (TIMESTAMPTZ, NULL) : Timestamp du début du fetch en cours. Remplace un simple booléen pour permettre l'auto-expiration des locks orphelins (ex: crash du worker). Un feed est considéré verrouillé si `fetching_since IS NOT NULL AND fetching_since > NOW() - INTERVAL '10 minutes'`.
+- `consecutive_failures` (INTEGER, DEFAULT 0) : Compteur d'échecs consécutifs. Le feed est automatiquement désactivé (`is_active = FALSE`) après 10 échecs consécutifs. Remis à zéro après chaque fetch réussi.
 
-Le scheduler est responsable de l'orchestration de la synchronisation périodique.
+#### 2. Scheduler (`internal/service/scheduler.go`)
+
+Le scheduler orchestre la synchronisation périodique.
 
 ```go
 type Scheduler struct {
@@ -65,145 +73,99 @@ type Scheduler struct {
     logger    *jsonlog.Logger
     interval  time.Duration    // Intervalle entre chaque tick (ex: 15min)
     workers   int              // Nombre de workers concurrents (ex: 5)
-    quit      chan struct{}     // Signal d'arrêt
+    quit      chan struct{}    // Signal d'arrêt
     wg        sync.WaitGroup   // Attente de fin des workers
 }
 ```
 
-**Responsabilités :**
+**Cycle de vie :** Lancer le Ticker -> Fetcher les feeds -> Distribuer au Worker Pool -> Attendre la complétion ou le signal `quit` (Graceful Shutdown).
 
-- Lancer un `time.Ticker` à l'intervalle configuré
-- À chaque tick, récupérer la liste des feeds à synchroniser
-- Distribuer les feeds dans un worker pool via un channel
-- Respecter le graceful shutdown via le contexte et le channel `quit`
+#### 3. Query `GetFeedsToSync` (`internal/data/feeds.go`)
 
-**Cycle de vie :**
-
-```
-Start(ctx) ─────> ticker.C reçu ─────> GetFeedsToSync()
-                       │                      │
-                       │               ┌──────▼──────┐
-                       │               │  Envoyer    │
-                       │               │  feeds dans │
-                       │               │  le channel │
-                       │               └──────┬──────┘
-                       │                      │
-                       │               ┌──────▼──────┐
-                       │               │  Workers    │
-                       │               │  traitent   │
-                       │               │  chaque feed│
-                       │               └─────────────┘
-                       │
-              ctx.Done() ─────> Stop() ─────> wg.Wait()
-```
-
-#### 2. Query `GetFeedsToSync` (`internal/data/feeds.go`)
-
-Nouvelle méthode sur `FeedModel` pour récupérer les feeds éligibles à la synchronisation.
+Pour éviter qu'un feed long à traiter ne soit sélectionné deux fois lors du tick suivant (Thundering Herd), nous utilisons une requête `UPDATE ... RETURNING` avec `SKIP LOCKED` natif à PostgreSQL. 
 
 ```sql
-SELECT f.id, f.url, f.original_title, f.site_url, f.image_url,
-       f.last_fetched_at, f.is_active, f.created_at
-FROM feeds f
-WHERE f.is_active = TRUE
-  AND EXISTS (
-      SELECT 1 FROM subscriptions s WHERE s.feed_id = f.id
-  )
-  AND (
-      f.last_fetched_at IS NULL
-      OR f.last_fetched_at < NOW() - INTERVAL '15 minutes'
-  )
-ORDER BY f.last_fetched_at ASC NULLS FIRST
-LIMIT $1;
+UPDATE feeds
+SET fetching_since = NOW()
+WHERE id IN (
+    SELECT id FROM feeds f
+    WHERE f.is_active = TRUE
+      AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - INTERVAL '10 minutes')
+      AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.feed_id = f.id)
+      AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - INTERVAL '15 minutes')
+    ORDER BY f.last_fetched_at ASC NULLS FIRST
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, url, http_etag, http_last_modified;
 ```
 
-**Critères :**
+**Notes :**
+- `last_fetched_at` n'est **pas** mis à jour ici. Il sera mis à jour uniquement après un fetch réussi, ce qui évite de devoir restaurer sa valeur précédente en cas d'échec.
+- `fetching_since` avec un seuil de 10 minutes remplace le booléen `is_fetching` : si un worker crash, le lock expire automatiquement et le feed redevient éligible au prochain tick.
 
-- Le feed est actif (`is_active = TRUE`)
-- Au moins un utilisateur est abonné
-- Le dernier fetch date de plus de 15 minutes (ou jamais fetché)
-- Les feeds les plus anciens sont traités en priorité
-- Limite configurable pour ne pas surcharger un seul tick
+#### 4. Distribution aux abonnés (`internal/service/fetcher.go`)
 
-#### 3. Distribution aux abonnés (`internal/service/fetcher.go`)
+Nouvelle méthode `ImportArticlesForSubscribers()` optimisée :
 
-Nouvelle méthode `ImportArticlesForSubscribers()` qui étend `ImportArticles()` :
+La logique d'extraction d'articles (readability, hash, métadonnées) doit être factorisée dans une méthode privée commune avec `ImportArticles()` existante, pour éviter la duplication de code.
 
-```
+```text
 Pour chaque feed à synchroniser :
-  1. Fetch le flux RSS
-  2. Pour chaque item du flux :
-     a. Vérifier si l'article existe (par hash)
-     b. Si non, créer l'article (scraping + readability)
-     c. Récupérer TOUS les abonnés du feed
-     d. Pour chaque abonné, créer un link s'il n'existe pas
-  3. Mettre à jour feed.last_fetched_at
+  1. Fetch le flux RSS en envoyant les headers conditionnels :
+     - If-None-Match: [http_etag]
+     - If-Modified-Since: [http_last_modified]
+  2. Si le serveur répond HTTP 304 (Not Modified) :
+     a. Mettre fetching_since = NULL, last_fetched_at = NOW(),
+        consecutive_failures = 0, loguer le succès, et passer au feed suivant.
+  3. Si erreur (timeout, 4xx, 5xx) :
+     a. Incrémenter consecutive_failures.
+     b. Si consecutive_failures >= 10, mettre is_active = FALSE et loguer un warning.
+     c. Mettre fetching_since = NULL (libérer le lock).
+  4. Si HTTP 200 (nouveau contenu) :
+     a. Parser le flux, sauvegarder les nouveaux etag/last-modified.
+     b. Pour chaque item du flux, vérifier si l'article existe (par hash). Si non, créer l'article.
+        (Réutiliser la logique privée commune : readability, hash, métadonnées.)
+     c. Récupérer la liste des IDs de TOUS les abonnés du feed.
+     d. Effectuer un BULK INSERT pour créer les liens abonnés-articles en une seule requête SQL
+        (INSERT INTO links ... ON CONFLICT DO NOTHING) plutôt qu'une requête par abonné.
+  5. Mettre à jour : fetching_since = NULL, last_fetched_at = NOW(),
+     consecutive_failures = 0 en BDD.
 ```
 
-#### 4. Query `GetSubscribersByFeed` (`internal/data/subscriptions.go`)
+### Distribution des feeds aux workers
 
-```sql
-SELECT s.user_id
-FROM subscriptions s
-WHERE s.feed_id = $1;
-```
-
-#### 5. Intégration dans `main.go`
+Les feeds récupérés par `GetFeedsToSync` (jusqu'à `SCHEDULER_BATCH_SIZE`) sont envoyés dans un channel buffered. Les `SCHEDULER_WORKERS` goroutines consomment ce channel en parallèle. Chaque worker traite un feed à la fois jusqu'à ce que le channel soit vide.
 
 ```go
-// Démarrer le scheduler
-scheduler := service.NewScheduler(app.services, app.logger, cfg.scheduler)
-go scheduler.Start(ctx)
+feedsChan := make(chan Feed, len(feeds))
+for _, f := range feeds {
+    feedsChan <- f
+}
+close(feedsChan)
 
-// Graceful shutdown
-// Le scheduler s'arrête proprement quand le contexte est annulé
+for i := 0; i < s.workers; i++ {
+    s.wg.Add(1)
+    go func() {
+        defer s.wg.Done()
+        for feed := range feedsChan {
+            s.processFeed(ctx, feed)
+        }
+    }()
+}
 ```
 
-### Configuration
+### Rate limiting par domaine
 
-Nouvelles variables d'environnement :
+Pour éviter de bombarder un même serveur avec plusieurs requêtes simultanées, un rate limiter par domaine est appliqué (`golang.org/x/time/rate`). Chaque domaine est limité à 1 requête par seconde. Le rate limiter est partagé entre tous les workers via une `sync.Map`.
+
+### Configuration
 
 | Variable | Description | Défaut |
 |----------|-------------|--------|
 | `SCHEDULER_INTERVAL` | Intervalle entre chaque sync | `15m` |
 | `SCHEDULER_WORKERS` | Nombre de workers concurrents | `5` |
 | `SCHEDULER_BATCH_SIZE` | Nombre max de feeds par tick | `50` |
-| `SCHEDULER_ENABLED` | Activer/désactiver le scheduler | `true` |
-
-### Gestion des erreurs
-
-| Situation | Comportement |
-|-----------|-------------|
-| Feed HTTP timeout (30s) | Log l'erreur, passer au feed suivant |
-| Feed RSS invalide | Log l'erreur, passer au feed suivant |
-| Erreur scraping d'un article | Log l'erreur, continuer avec les autres articles |
-| Erreur BDD | Log l'erreur, passer au feed suivant |
-| Feed en erreur répétée | Désactiver le feed après N échecs consécutifs (à implémenter) |
-
-### Observabilité
-
-Logs structurés JSON à chaque tick :
-
-```json
-{
-  "level": "INFO",
-  "message": "sync completed",
-  "properties": {
-    "feeds_synced": 12,
-    "articles_created": 34,
-    "links_created": 78,
-    "errors": 1,
-    "duration_ms": 4520
-  }
-}
-```
-
-### Limites de cette approche
-
-- **Pas de persistance des jobs** : si l'app redémarre pendant un sync, le travail en cours est perdu (mais la déduplication par hash rend le re-sync safe)
-- **Single instance** : si plusieurs instances tournent, chaque instance lancera son propre scheduler (risque de doublons de travail, pas de verrouillage)
-- **Pas de retry intelligent** : un feed en erreur sera simplement re-tenté au prochain tick
-- **Pas de priorité dynamique** : tous les feeds sont traités de la même manière
 
 ---
 
@@ -211,181 +173,51 @@ Logs structurés JSON à chaque tick :
 
 ### Pourquoi évoluer ?
 
-La phase 1 fonctionne bien pour un déploiement single-instance avec un nombre modéré de feeds. Les limites apparaissent quand :
+La phase 1 atteint ses limites en cas de **Scaling horizontal** (multiples instances API), de fort volume de flux, et de besoin de **Retry avec backoff**.
 
-- **Scaling horizontal** : plusieurs instances de l'API tournent → les schedulers se marchent dessus
-- **Volume de feeds** : des milliers de feeds avec des fréquences de publication variées
-- **Fiabilité** : besoin de retry avec backoff, dead letter queue, suivi des échecs
-- **Observabilité** : besoin de savoir quels jobs sont en attente, en cours, échoués
+### Architecture cible avec River
 
-### Architecture cible
+[River](https://github.com/riverqueue/river) est une job queue Go native pour PostgreSQL. Elle gère le verrouillage via `SELECT ... FOR UPDATE SKIP LOCKED`, le retry exponentiel, et les workers concurrents.
 
-```
-┌────────────────┐     ┌────────────────┐     ┌────────────────┐
-│   API Instance │     │   API Instance │     │   API Instance │
-│       #1       │     │       #2       │     │       #3       │
-│                │     │                │     │                │
-│  ┌──────────┐  │     │  ┌──────────┐  │     │  ┌──────────┐  │
-│  │ Worker   │  │     │  │ Worker   │  │     │  │ Worker   │  │
-│  │ Client   │  │     │  │ Client   │  │     │  │ Client   │  │
-│  └────┬─────┘  │     │  └────┬─────┘  │     │  └────┬─────┘  │
-└───────┼────────┘     └───────┼────────┘     └───────┼────────┘
-        │                      │                      │
-        └──────────────────────┼──────────────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │     PostgreSQL      │
-                    │                     │
-                    │  ┌───────────────┐  │
-                    │  │   jobs table  │  │
-                    │  │               │  │
-                    │  │ - id          │  │
-                    │  │ - queue       │  │
-                    │  │ - state       │  │
-                    │  │ - args (JSON) │  │
-                    │  │ - attempts    │  │
-                    │  │ - max_retries │  │
-                    │  │ - scheduled_at│  │
-                    │  │ - locked_by   │  │
-                    │  │ - locked_at   │  │
-                    │  │ - completed_at│  │
-                    │  │ - failed_at   │  │
-                    │  │ - last_error  │  │
-                    │  └───────────────┘  │
-                    │                     │
-                    │  SELECT ... FOR     │
-                    │  UPDATE SKIP LOCKED │
-                    │  (verrouillage)     │
-                    └─────────────────────┘
-```
+### Optimisation : Le Polling Adaptatif
 
-### Librairie recommandée : River
+Au lieu de synchroniser tous les flux bêtement toutes les 15 minutes via un cron global, la Phase 2 introduira un système auto-régulé :
+* À la fin d'un `FeedSyncJob` réussi, le worker analyse la fréquence de publication du flux.
+* Il planifie **lui-même** le prochain run pour ce flux en insérant un nouveau job avec `scheduled_at = NOW() + dynamic_interval`.
+* Un flux très actif sera planifié dans 10 minutes, un flux inactif dans 24 heures.
 
-[River](https://github.com/riverqueue/river) est une job queue Go native pour PostgreSQL, bien adaptée à ce cas d'usage :
-
-- Utilise `pgx` (driver PostgreSQL performant)
-- Verrouillage via `SELECT ... FOR UPDATE SKIP LOCKED` (pas de polling agressif)
-- Retry avec backoff exponentiel configurable
-- Scheduling périodique intégré (cron-like)
-- Observabilité via table `river_job`
-- Workers concurrents avec graceful shutdown
-- Dead letter queue pour les jobs qui échouent trop
-
-### Schéma de la table jobs
+### Schéma de la table jobs (géré par River)
 
 ```sql
 CREATE TABLE river_job (
     id          BIGSERIAL PRIMARY KEY,
-    state       TEXT NOT NULL DEFAULT 'available',  -- available, running, completed, retryable, discarded
+    state       TEXT NOT NULL DEFAULT 'available',
     queue       TEXT NOT NULL DEFAULT 'default',
-    kind        TEXT NOT NULL,                       -- ex: 'feed_sync'
-    args        JSONB NOT NULL,                      -- ex: {"feed_id": 42}
+    kind        TEXT NOT NULL,
+    args        JSONB NOT NULL,
     attempt     INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 5,
     priority    INTEGER NOT NULL DEFAULT 1,
     scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    attempted_at TIMESTAMPTZ,
-    finalized_at TIMESTAMPTZ,
-    errors      JSONB,                               -- Historique des erreurs
-    metadata    JSONB,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    -- ... autres champs internes à River
 );
-
-CREATE INDEX idx_river_job_state_queue ON river_job(state, queue, scheduled_at);
 ```
 
 ### Types de jobs
 
 #### 1. `FeedSyncJob` — Synchronisation d'un flux
+* **Rôle :** Fetch le flux (avec courtoisie HTTP), Bulk Insert des articles/links, calcule le prochain intervalle de vérification, et enqueue le prochain `FeedSyncJob`.
+* **Retry :** 3 tentatives avec backoff exponentiel (1min, 5min, 30min). Marqué comme `discarded` après 3 échecs (Dead Letter Queue).
 
-```go
-type FeedSyncArgs struct {
-    FeedID int64 `json:"feed_id"`
-}
-```
+#### 2. `FeedHealthCheckJob` — Vérification et Nettoyage (Maintenance)
+* **Rôle 1 :** Job périodique qui désactive les feeds morts (ex: 404 consécutifs) et notifie les abonnés.
+* **Rôle 2 (Pruning) :** Configuration du *Pruning* agressif de River pour supprimer régulièrement les `river_job` avec `state = 'completed'`. Cela évite que la table PostgreSQL ne grossisse indéfiniment.
 
-**Comportement :**
-- Fetch le flux RSS, crée les articles, distribue les links aux abonnés
-- Retry : 3 tentatives avec backoff exponentiel (1min, 5min, 30min)
-- Après 3 échecs : marquer le job comme `discarded`, log une alerte
+### Considérations techniques pour la migration
 
-#### 2. `FeedSyncSchedulerJob` — Enqueue les syncs (périodique)
-
-Job cron qui s'exécute toutes les 15 minutes :
-
-```go
-// Toutes les 15 minutes, enqueue un FeedSyncJob pour chaque feed éligible
-river.PeriodicJob{
-    Schedule: "*/15 * * * *",
-    Constructor: func() (river.JobArgs, *river.InsertOpts) {
-        return FeedSyncSchedulerArgs{}, nil
-    },
-}
-```
-
-Ce job :
-1. Récupère les feeds éligibles via `GetFeedsToSync()`
-2. Enqueue un `FeedSyncJob` pour chacun
-3. River se charge de la distribution aux workers disponibles
-
-#### 3. `FeedHealthCheckJob` — Vérification de santé (futur)
-
-Job périodique (toutes les heures) qui :
-- Vérifie les feeds en erreur répétée
-- Désactive les feeds morts (404, DNS failure)
-- Envoie des notifications aux abonnés si un feed est désactivé
-
-### Queues et priorités
-
-| Queue | Priorité | Workers | Usage |
-|-------|----------|---------|-------|
-| `feed_sync` | 1 (normal) | 10 | Sync périodique des feeds |
-| `feed_sync_immediate` | 2 (haute) | 5 | Sync à la souscription (résultat rapide pour l'utilisateur) |
-| `maintenance` | 0 (basse) | 2 | Health checks, nettoyage |
-
-### Avantages par rapport à la phase 1
-
-| Aspect | Phase 1 (ticker) | Phase 2 (River) |
-|--------|-------------------|-----------------|
-| Multi-instance | Non (doublons de travail) | Oui (verrouillage PostgreSQL) |
-| Retry | Re-tenté au prochain tick | Backoff exponentiel configurable |
-| Observabilité | Logs uniquement | Table `river_job` requêtable |
-| Priorisation | Non | Oui (queues + priorités) |
-| Persistance | Non (perdu au restart) | Oui (jobs en BDD) |
-| Scheduling | `time.Ticker` fixe | Expressions cron flexibles |
-| Dead letter | Non | Oui (jobs `discarded`) |
-| Complexité | Faible | Moyenne |
-| Dépendances | Aucune | `riverqueue/river`, `pgx` |
-
-### Migration phase 1 → phase 2
-
-La migration est incrémentale :
-
-1. **Ajouter River** : `go get github.com/riverqueue/river`
-2. **Migrer le driver** : passer de `lib/pq` à `pgx` (River le requiert)
-3. **Créer les workers** : encapsuler la logique existante de `FeedService` dans des `river.Worker`
-4. **Remplacer le scheduler** : supprimer le ticker, configurer les periodic jobs River
-5. **Supprimer l'ancien code** : retirer `scheduler.go` et la goroutine dans `main.go`
-
-La logique métier (`ImportArticlesForSubscribers`, `GetFeedsToSync`) reste identique — seule l'orchestration change.
-
-### Considérations pour la migration
-
-- **Driver PostgreSQL** : River utilise `pgx` au lieu de `lib/pq`. Il faudra migrer le driver pour toute l'application ou maintenir les deux (non recommandé).
-- **Migrations** : River fournit ses propres migrations pour créer ses tables internes.
-- **Monitoring** : River expose une API Go pour lister/annuler des jobs. On peut l'exposer via un endpoint admin.
-
----
-
-## Résumé des étapes d'implémentation (Phase 1)
-
-1. Ajouter `GetFeedsToSync()` dans `internal/data/feeds.go`
-2. Ajouter `GetSubscribersByFeed()` dans `internal/data/subscriptions.go`
-3. Ajouter `ImportArticlesForSubscribers()` dans `internal/service/fetcher.go`
-4. Créer `internal/service/scheduler.go` (Scheduler + worker pool)
-5. Ajouter la config scheduler dans `main.go`
-6. Lancer le scheduler au démarrage avec graceful shutdown
-7. Ajouter les variables d'environnement
+1. **Pool de connexions (`pgxpool`) :** River requiert le driver `pgx`. Il est crucial de configurer correctement la taille du pool (`max_conns`) pour absorber les requêtes de l'API HTTP **et** la concurrence des workers River.
+2. **Migrations automatiques :** River fournit ses propres outils de migration SQL pour maintenir la table `river_job`.
+3. **API Admin :** Exposer les métriques de River (jobs en attente, erreurs) sur un endpoint protégé pour faciliter l'observabilité.
 
 ---
 

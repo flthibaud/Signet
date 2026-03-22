@@ -31,13 +31,19 @@ type config struct {
 		burst   int
 		enabled bool
 	}
+	scheduler struct {
+		interval  time.Duration
+		workers   int
+		batchSize int
+	}
 }
 
 type application struct {
-	config   config
-	logger   *jsonlog.Logger
-	models   data.Models
-	services service.Services
+	config    config
+	logger    *jsonlog.Logger
+	models    data.Models
+	services  service.Services
+	scheduler *service.Scheduler
 }
 
 func main() {
@@ -54,6 +60,23 @@ func main() {
 	cfg.limiter.rps, _ = strconv.ParseFloat(os.Getenv("RATE_LIMITER_RPS"), 64)
 	cfg.limiter.burst, _ = strconv.Atoi(os.Getenv("RATE_LIMITER_BURST"))
 	cfg.limiter.enabled, _ = strconv.ParseBool(os.Getenv("RATE_LIMITER_ENABLED"))
+
+	schedulerInterval := os.Getenv("SCHEDULER_INTERVAL")
+	if schedulerInterval == "" {
+		schedulerInterval = "15m"
+	}
+	cfg.scheduler.interval, err = time.ParseDuration(schedulerInterval)
+	if err != nil {
+		log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)
+	}
+	cfg.scheduler.workers, _ = strconv.Atoi(os.Getenv("SCHEDULER_WORKERS"))
+	if cfg.scheduler.workers == 0 {
+		cfg.scheduler.workers = 5
+	}
+	cfg.scheduler.batchSize, _ = strconv.Atoi(os.Getenv("SCHEDULER_BATCH_SIZE"))
+	if cfg.scheduler.batchSize == 0 {
+		cfg.scheduler.batchSize = 50
+	}
 
 	databaseURL := os.Getenv("DATABASE_URI")
 	if databaseURL == "" {
@@ -81,13 +104,15 @@ func main() {
 	// 3. Init de la couche SERVICE (avec injection de data)
 	services := service.NewServices(models)
 
-	// Declare an instance of the application struct, containing the config struct and
-	// the logger.
+	// 4. Init du scheduler
+	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)
+
 	app := &application{
-		config:   cfg,
-		logger:   logger,
-		models:   models,
-		services: services,
+		config:    cfg,
+		logger:    logger,
+		models:    models,
+		services:  services,
+		scheduler: scheduler,
 	}
 
 	// Start the HTTP server.
