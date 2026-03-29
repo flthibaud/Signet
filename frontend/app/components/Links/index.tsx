@@ -43,7 +43,7 @@ export const Links = () => {
   return (
     <div className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
       {links.map((link) => (
-        <Link to={`/app/read/${link.id}`} className="flex-1" key={link.id}>
+        <Link to={`/app/read/${link.slug}`} className="flex-1" key={link.id}>
           <article
             className="flex gap-4 py-4 px-2 -mx-2 rounded-lg cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
           >

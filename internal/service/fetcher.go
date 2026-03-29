@@ -95,11 +95,11 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 
 	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "" {
 		title = item.Title
-		originalHTML = cleanHTML(item.Content)
+		originalHTML = item.Content
 		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
 	} else {
 		title = parsed.Title()
-		originalHTML = cleanHTML(renderToValidUTF8(parsed.RenderHTML))
+		originalHTML = renderToValidUTF8(parsed.RenderHTML)
 		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
 	}
 

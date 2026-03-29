@@ -28,13 +28,13 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 
 func (app *application) getLinkHandler(w http.ResponseWriter, r *http.Request) {
 	user := app.contextGetUser(r)
-	id, err := app.readIDParam(r)
+	slug, err := app.readSlugParam(r)
 	if err != nil {
 		app.badRequestResponse(w, r, err)
 		return
 	}
 
-	link, err := app.models.Links.GetByID(r.Context(), id, user.ID)
+	link, err := app.models.Links.GetBySlug(r.Context(), slug, user.ID)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 		return

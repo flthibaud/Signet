@@ -62,6 +62,15 @@ func (app *application) readIDParam(r *http.Request) (int64, error) {
 	return id, nil
 }
 
+func (app *application) readSlugParam(r *http.Request) (string, error) {
+	params := httprouter.ParamsFromContext(r.Context())
+	slug := params.ByName("slug")
+	if slug == "" {
+		return "", errors.New("invalid slug parameter")
+	}
+	return slug, nil
+}
+
 // Define a writeJSON() helper for sending responses. This takes the destination
 // http.ResponseWriter, the HTTP status code to send, the data to encode to JSON, and a
 // header map containing any additional HTTP headers we want to include in the response.

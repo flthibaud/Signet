@@ -49,7 +49,7 @@ type application struct {
 func main() {
 	var cfg config
 
-	// Load .env file if present (optional in production/Docker)
+	// Load .env file if present
 	_ = godotenv.Load()
 
 	cfg.env = os.Getenv("ENV")
@@ -63,6 +63,7 @@ func main() {
 	if schedulerInterval == "" {
 		schedulerInterval = "15m"
 	}
+	var err error
 	cfg.scheduler.interval, err = time.ParseDuration(schedulerInterval)
 	if err != nil {
 		log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)

@@ -140,7 +140,7 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 	return links, totalRecords, nil
 }
 
-func (m LinkModel) GetByID(ctx context.Context, id int64, userID uuid.UUID) (*LinkDetail, error) {
+func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID) (*LinkDetail, error) {
 	query := `
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
 			l.saved_at, l.created_at, l.updated_at,
@@ -150,10 +150,10 @@ func (m LinkModel) GetByID(ctx context.Context, id int64, userID uuid.UUID) (*Li
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
 		LEFT JOIN feeds f ON l.feed_id = f.id
-		WHERE l.id = $1 AND l.user_id = $2`
+		WHERE l.slug = $1 AND l.user_id = $2`
 
 	var link LinkDetail
-	err := m.DB.QueryRowContext(ctx, query, id, userID).Scan(
+	err := m.DB.QueryRowContext(ctx, query, slug, userID).Scan(
 		&link.ID,
 		&link.ArticleID,
 		&link.Slug,

@@ -1,6 +1,7 @@
 export interface Link {
   id: number;
   title: string;
+  slug: string;
   description: string;
   image_url: string;
   saved_at: string;
