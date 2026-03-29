@@ -49,10 +49,8 @@ type application struct {
 func main() {
 	var cfg config
 
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
+	// Load .env file if present (optional in production/Docker)
+	_ = godotenv.Load()
 
 	cfg.env = os.Getenv("ENV")
 	cfg.port, _ = strconv.Atoi(os.Getenv("PORT"))
