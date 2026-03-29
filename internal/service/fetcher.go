@@ -13,8 +13,8 @@ import (
 	"time"
 
 	readability "codeberg.org/readeck/go-readability/v2"
-	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/flthibaud/omnivore-go/internal/data"
+	readabilitymd "github.com/flthibaud/omnivore-go/internal/readability"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"
@@ -26,9 +26,10 @@ var (
 )
 
 type FeedService struct {
-	models data.Models
-	client *http.Client
-	parser *gofeed.Parser
+	models      data.Models
+	client      *http.Client
+	parser      *gofeed.Parser
+	readability *readabilitymd.Readability
 }
 
 func NewFeedService(models data.Models) *FeedService {
@@ -37,7 +38,8 @@ func NewFeedService(models data.Models) *FeedService {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		parser: gofeed.NewParser(),
+		parser:      gofeed.NewParser(),
+		readability: readabilitymd.NewReadability(),
 	}
 }
 
@@ -96,11 +98,11 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "" {
 		title = item.Title
 		originalHTML = item.Content
-		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
+		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
 	} else {
 		title = parsed.Title()
 		originalHTML = renderToValidUTF8(parsed.RenderHTML)
-		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
+		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
 	}
 
 	// Crée l'article
