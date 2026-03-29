@@ -87,7 +87,6 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 
 // createArticleFromItem crée un article depuis un RSS item
 func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash string) (*data.Article, error) {
-	p := bluemonday.UGCPolicy()
 	strip := bluemonday.StrictPolicy()
 
 	parsed, err := s.fetchWithReadability(item.Link)
@@ -96,11 +95,11 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 
 	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "" {
 		title = item.Title
-		originalHTML = p.Sanitize(item.Content)
-		textContent, _ = htmltomarkdown.ConvertString(item.Content)
+		originalHTML = cleanHTML(item.Content)
+		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
 	} else {
 		title = parsed.Title()
-		originalHTML = renderToValidUTF8(parsed.RenderHTML)
+		originalHTML = cleanHTML(renderToValidUTF8(parsed.RenderHTML))
 		textContent, _ = htmltomarkdown.ConvertString(originalHTML)
 	}
 

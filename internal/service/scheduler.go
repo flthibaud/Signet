@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strconv"
 	"sync"
@@ -110,6 +111,16 @@ type feedSyncJob struct {
 }
 
 func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.PrintError(fmt.Errorf("panic processing feed %d: %v", job.feed.ID, r), map[string]string{
+				"feed_id": strconv.FormatInt(job.feed.ID, 10),
+				"url":     job.feed.Url,
+			})
+			s.services.FeedService.models.Feeds.MarkFeedFailed(ctx, job.feed.ID)
+		}
+	}()
+
 	// Rate limit per domain
 	domain := extractDomain(job.feed.Url)
 	limiter := s.getOrCreateLimiter(domain)
