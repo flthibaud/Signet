@@ -1,37 +1,29 @@
-import { useState, useEffect } from "react";
 import { twMerge } from "tailwind-merge";
 import { Sun, Moon } from "lucide-react";
+import useTheme from "~/hooks/useTheme";
 
 type ToggleThemeProps = {
   visible?: boolean;
 };
 
 const ToggleTheme = ({ visible }: ToggleThemeProps) => {
-  const [colorMode, setColorMode] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    const current = document.documentElement.getAttribute("data-theme");
-    if (current === "dark" || current === "light") {
-      setColorMode(current);
-    }
-  }, []);
+  const [colorTheme, setTheme] = useTheme();
 
   const handleSetColorMode = (mode: "light" | "dark") => {
-    setColorMode(mode);
-    document.documentElement.setAttribute("data-theme", mode);
+    setTheme(mode);
   };
 
   const items = [
     {
       title: "Light",
       icon: Sun,
-      active: colorMode === "light",
+      active: colorTheme === "light",
       onClick: () => handleSetColorMode("light"),
     },
     {
       title: "Dark",
       icon: Moon,
-      active: colorMode === "dark",
+      active: colorTheme === "dark",
       onClick: () => handleSetColorMode("dark"),
     },
   ];
@@ -41,7 +33,7 @@ const ToggleTheme = ({ visible }: ToggleThemeProps) => {
       className={`${
         visible &&
         `relative flex w-full p-1 bg-[#232627] rounded-xl before:absolute before:left-1 before:top-1 before:bottom-1 before:w-[calc(50%-0.25rem)] before:bg-[#141718] before:rounded-[0.625rem] before:transition-all ${
-          colorMode === "dark" && "before:translate-x-full"
+          colorTheme === "dark" && "before:translate-x-full"
         }`
       }`}
     >
