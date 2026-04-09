@@ -23,26 +23,26 @@ func (app *application) serve() error {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	// Start the background scheduler
+	app.scheduler.Start()
+
 	shutdownError := make(chan error)
 
-	// Start a background goroutine.
 	go func() {
-		// Intercept the signals, as before.
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 		s := <-quit
-		// Update the log entry to say "shutting down server" instead of "caught signal".
+
 		app.logger.PrintInfo("shutting down server", map[string]string{
 			"signal": s.String(),
 		})
-		// Create a context with a 20-second timeout.
+
+		// Stop the scheduler first, wait for in-flight workers
+		app.scheduler.Stop()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		// Call Shutdown() on our server, passing in the context we just made.
-		// Shutdown() will return nil if the graceful shutdown was successful, or an
-		// error (which may happen because of a problem closing the listeners, or
-		// because the shutdown didn't complete before the 20-second context deadline is
-		// hit). We relay this return value to the shutdownError channel.
+
 		shutdownError <- srv.Shutdown(ctx)
 	}()
 

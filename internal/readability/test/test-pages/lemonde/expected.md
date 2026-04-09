@@ -1,0 +1,9 @@
+« Les gourous de l’IA » 5/12. Le fondateur et patron de la société spécialisée dans les microprocesseurs, est messianique. Mais son ton posé lui donne une crédibilité sans doute plus grande que le fantasque Elon Musk. Face à la révolution de l’IA, il n’en prévoit pas moins une terra incognita, un monde méconnaissable.
+
+![Jensen Huang, en 2026](https://img.lemde.fr/2026/03/19/0/0/3000/2000/664/0/75/0/d9d8ac3_upload-1-oxrfiwgnawch-jensen-huang.jpg)
+
+Dans l’intelligence artificielle (IA), il y a les gourous, qui prêchent dans leur superbe isolement, et les parrains : Jensen Huang, 63 ans, est le premier d’entre eux, qui règne sur un empire, celui de la tech mondiale. Pour comprendre le pouvoir du fondateur de Nvidia, première capitalisation mondiale, il suffisait de se rendre aux rencontres de l’entreprise organisées la semaine du 16 mars à San José, au sud de la baie de San Francisco. Dans le centre des congrès, des centaines d’entreprises exposent leurs produits, des dizaines de start-up affichent fièrement qu’elles ont été financées par Nvidia, la firme qui fournit les puces indispensables à l’intelligence artificielle.
+
+Jensen Huang a de nouveau fait son show, seul sur scène, avec son inévitable blouson noir, pendant plus de deux heures le lundi devant des milliers de techos passionnés venus boire ses paroles, et il a recommencé le lendemain devant la presse. Tout ce que touche Nvidia devient de l’or, ou du moins est oint de l’onction de l’IA, tandis que ceux qui n’en sont pas semblent rater la révolution en cours.
+
+**Il vous reste 81.37% de cet article à lire. La suite est réservée aux abonnés.**

@@ -119,6 +119,28 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 	return subscriptions, nil
 }
 
+// GetSubscriberIDs returns all user IDs subscribed to a given feed.
+func (m SubscriptionModel) GetSubscriberIDs(ctx context.Context, feedID int64) ([]uuid.UUID, error) {
+	query := `SELECT user_id FROM subscriptions WHERE feed_id = $1`
+
+	rows, err := m.DB.QueryContext(ctx, query, feedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var userIDs []uuid.UUID
+	for rows.Next() {
+		var uid uuid.UUID
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		userIDs = append(userIDs, uid)
+	}
+
+	return userIDs, rows.Err()
+}
+
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
 	query := `
 		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, created_at)

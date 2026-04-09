@@ -34,7 +34,7 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/links", app.listLinksHandler)
 
 	// Recuperer le contenu d'un article
-	router.HandlerFunc(http.MethodGet, "/v1/links/:id", app.getLinkHandler)
+	router.HandlerFunc(http.MethodGet, "/v1/links/:slug", app.getLinkHandler)
 
 	// Serve embedded frontend (React Router SPA build)
 	distFS, err := fs.Sub(omnivore.FrontendDist, "frontend/build/client")

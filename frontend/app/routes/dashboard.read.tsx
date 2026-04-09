@@ -18,12 +18,12 @@ function getTextContent(node: ReactNode): string {
 }
 
 export default function ArticlePage() {
-  const { id } = useParams();
+  const { slug } = useParams();
   const scrollRef = useRef<HTMLDivElement>(null);
   const { data: article, isLoading, error } = useQuery({
-    queryKey: ["article", id],
+    queryKey: ["article", slug],
     queryFn: async () => {
-      const response = await fetch(`/v1/links/${id}`);
+      const response = await fetch(`/v1/links/${slug}`);
       if (!response.ok) {
         throw new Error("Failed to fetch article");
       }

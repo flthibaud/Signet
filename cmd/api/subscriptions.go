@@ -85,7 +85,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 	// 6. Import des articles EN BACKGROUND (non-bloquant)
 	go func() {
 		ctx := context.Background()
-		err := app.services.FeedService.ImportArticles(ctx, feed.ID, userID)
+		err := app.services.FeedService.ImportArticlesForSubscribers(ctx, feed)
 		if err != nil {
 			app.logger.PrintError(err, nil)
 		}
