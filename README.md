@@ -15,6 +15,8 @@ L'objectif est de proposer une alternative légère, self-hostable, avec un seul
 
 ![feeds display on homepage](docs/resources/feeds-homepage.png "Feeds")
 
+![feeds details](docs/resources/feed-details.png "Feeds Details")
+
 ## Stack technique
 
 ### Backend ([cmd/api/](cmd/api/))
