@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/flthibaud/omnivore-go/internal/data"
-	"github.com/flthibaud/omnivore-go/internal/service"
-	"github.com/flthibaud/omnivore-go/internal/validator"
+	"github.com/flthibaud/origami/internal/data"
+	"github.com/flthibaud/origami/internal/service"
+	"github.com/flthibaud/origami/internal/validator"
 )
 
 func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http.Request) {

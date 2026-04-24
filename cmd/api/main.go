@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/flthibaud/omnivore-go/internal/data"
-	"github.com/flthibaud/omnivore-go/internal/jsonlog"
-	"github.com/flthibaud/omnivore-go/internal/service"
+	"github.com/flthibaud/origami/internal/data"
+	"github.com/flthibaud/origami/internal/jsonlog"
+	"github.com/flthibaud/origami/internal/service"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )

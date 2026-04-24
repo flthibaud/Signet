@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/flthibaud/omnivore-go/internal/data"
+	"github.com/flthibaud/origami/internal/data"
 )
 
 // Define a custom contextKey type, with the underlying type string.

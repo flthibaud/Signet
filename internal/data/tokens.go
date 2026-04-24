@@ -8,7 +8,7 @@ import (
 	"encoding/base32"
 	"time"
 
-	"github.com/flthibaud/omnivore-go/internal/validator"
+	"github.com/flthibaud/origami/internal/validator"
 	"github.com/google/uuid"
 )
 

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flthibaud/omnivore-go/internal/data"
-	"github.com/flthibaud/omnivore-go/internal/validator"
+	"github.com/flthibaud/origami/internal/data"
+	"github.com/flthibaud/origami/internal/validator"
 	"golang.org/x/time/rate"
 )
 

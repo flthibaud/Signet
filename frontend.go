@@ -1,4 +1,4 @@
-package omnivore
+package origami
 
 import "embed"
 

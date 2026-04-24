@@ -1,4 +1,4 @@
-# Architecture Omnivore-Go
+# Architecture Origami
 
 ## Table des matières
 
@@ -17,7 +17,7 @@
 
 ## Vue d'ensemble
 
-Omnivore-Go est un lecteur "read-it-later" avec support natif des flux RSS/Atom, écrit en Go. L'architecture repose sur une séparation claire entre :
+Origami est un lecteur "read-it-later" avec support natif des flux RSS/Atom, écrit en Go. L'architecture repose sur une séparation claire entre :
 
 - **Le contenu partagé** : Articles stockés une seule fois
 - **Les données personnelles** : État de lecture et organisation par utilisateur
@@ -35,7 +35,7 @@ Omnivore-Go est un lecteur "read-it-later" avec support natif des flux RSS/Atom,
 ## Structure du projet
 
 ```
-omnivore-go/
+origami/
 ├── cmd/
 │   └── api/                    # Point d'entrée de l'API
 │       ├── main.go             # Bootstrap, config, démarrage

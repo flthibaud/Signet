@@ -17,9 +17,9 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: omnivore
-      POSTGRES_USER: omnivore
-      POSTGRES_PASSWORD: omnivore
+      POSTGRES_DB: origami
+      POSTGRES_USER: origami
+      POSTGRES_PASSWORD: origami
     ports:
       - "5432:5432"
     volumes:

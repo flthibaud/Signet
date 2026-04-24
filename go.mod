@@ -1,4 +1,4 @@
-module github.com/flthibaud/omnivore-go
+module github.com/flthibaud/origami
 
 go 1.25.0
 

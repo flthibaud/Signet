@@ -13,8 +13,8 @@ import (
 	"time"
 
 	readability "codeberg.org/readeck/go-readability/v2"
-	"github.com/flthibaud/omnivore-go/internal/data"
-	readabilitymd "github.com/flthibaud/omnivore-go/internal/readability"
+	"github.com/flthibaud/origami/internal/data"
+	readabilitymd "github.com/flthibaud/origami/internal/readability"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"

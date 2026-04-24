@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/flthibaud/omnivore-go/internal/data"
+	"github.com/flthibaud/origami/internal/data"
 )
 
 // Services regroupe toute la logique métier de ton application.

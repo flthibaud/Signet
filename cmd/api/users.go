@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/flthibaud/omnivore-go/internal/data"
-	"github.com/flthibaud/omnivore-go/internal/validator"
+	"github.com/flthibaud/origami/internal/data"
+	"github.com/flthibaud/origami/internal/validator"
 )
 
 func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Request) {
