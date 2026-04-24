@@ -13,6 +13,7 @@ var removalRules = []func(*html.Node) bool{
 	hasAttrRule("data-vendor"),    // consent blocks
 	hasAttrRule("data-tracking"),
 	tagRule("picture"),                               // lazy-load wrappers with duplicate imgs
+	hasIDRule("div", "download"),                      // Numerama app download widget
 	hasIDRule("div", "js-modal-gifted-url"),          // Le Monde gifted modal
 	hasIDRule("section", "js-capping"),               // Le Monde paywall cap
 	hasIDRule("section", "js-capping-old-article"),   // Le Monde paywall cap (old)
@@ -79,6 +80,7 @@ func preprocessDOM(root *html.Node) {
 	}
 
 	removeEmptyContainers(root)
+	removeHRBeforeEmbeddedTag(root)
 	removeTrailingHR(root)
 }
 
@@ -151,6 +153,36 @@ func isEffectivelyEmpty(n *html.Node) bool {
 		}
 	}
 	return true
+}
+
+// --- HR + embedded tag removal ---
+
+// removeHRBeforeEmbeddedTag removes any <hr> that is immediately followed by a
+// <div id="embedded-tag-*">, along with all subsequent siblings (the tag cloud
+// section at the bottom of Numerama articles).
+func removeHRBeforeEmbeddedTag(root *html.Node) {
+	type cutPoint struct{ parent, from *html.Node }
+	var cuts []cutPoint
+
+	walkTree(root, func(n *html.Node) bool {
+		if n.Type == html.ElementNode && n.Data == "hr" {
+			next := nextElementSibling(n)
+			if next != nil && next.Data == "div" && strings.HasPrefix(getAttr(next, "id"), "embedded-tag-") {
+				cuts = append(cuts, cutPoint{n.Parent, n})
+			}
+		}
+		return true
+	})
+
+	for _, cp := range cuts {
+		var toRemove []*html.Node
+		for s := cp.from; s != nil; s = s.NextSibling {
+			toRemove = append(toRemove, s)
+		}
+		for _, s := range toRemove {
+			cp.parent.RemoveChild(s)
+		}
+	}
 }
 
 // --- Trailing HR removal ---

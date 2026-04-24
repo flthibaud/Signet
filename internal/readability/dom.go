@@ -36,6 +36,15 @@ func firstElementChild(n *html.Node) *html.Node {
 	return nil
 }
 
+func nextElementSibling(n *html.Node) *html.Node {
+	for s := n.NextSibling; s != nil; s = s.NextSibling {
+		if s.Type == html.ElementNode {
+			return s
+		}
+	}
+	return nil
+}
+
 func lastElementChild(n *html.Node) *html.Node {
 	var last *html.Node
 	for c := n.FirstChild; c != nil; c = c.NextSibling {

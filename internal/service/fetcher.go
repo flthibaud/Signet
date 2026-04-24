@@ -95,7 +95,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 
 	var title, originalHTML, textContent string
 
-	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "" {
+	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "Client Challenge" || parsed.Title() == "" {
 		title = item.Title
 		originalHTML = item.Content
 		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
