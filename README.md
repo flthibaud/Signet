@@ -13,6 +13,8 @@ L'objectif est de proposer une alternative légère, self-hostable, avec un seul
 - **La déduplication** : un article sauvé par *N* utilisateurs n'est stocké qu'une seule fois
 - **La lecture** : extraction du contenu via readability, sanitization, temps de lecture estimé
 
+![feeds display on homepage](docs/resources/feeds-homepage.png "Feeds")
+
 ## Stack technique
 
 ### Backend ([cmd/api/](cmd/api/))
