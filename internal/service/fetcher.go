@@ -25,6 +25,8 @@ var (
 	ErrFeedNotFound = errors.New("feed not found or unreachable")
 )
 
+const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 type FeedService struct {
 	models      data.Models
 	client      *http.Client
@@ -231,7 +233,7 @@ func (s *FeedService) fetchWithReadability(articleURL string) (readability.Artic
 		return readability.Article{}, err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", UserAgent)
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
