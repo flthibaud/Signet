@@ -6,15 +6,31 @@ import ForgotPassword from "./ForgotPassword";
 
 const tabNav = ["Sign in", "Create account"];
 
+const SIGN_IN_TAB = 0;
+const CREATE_ACCOUNT_TAB = 1;
+
 const Form = () => {
   const [forgot, setForgot] = useState<boolean>(false);
+  const [selectedIndex, setSelectedIndex] = useState<number>(SIGN_IN_TAB);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const handleTabChange = (index: number) => {
+    setSelectedIndex(index);
+    // Clear the post-sign-up notice when the user leaves the sign-in tab.
+    if (index !== SIGN_IN_TAB) setNotice(null);
+  };
+
+  const handleSignUpSuccess = () => {
+    setSelectedIndex(SIGN_IN_TAB);
+    setNotice("Your account has been created. Please sign in.");
+  };
 
   return (
     <div className="w-full max-w-126 m-auto">
       {forgot ? (
         <ForgotPassword onClick={() => setForgot(false)} />
       ) : (
-        <TabGroup defaultIndex={0}>
+        <TabGroup selectedIndex={selectedIndex} onChange={handleTabChange}>
           <TabList className="flex mb-8 p-1 bg-[#F3F5F7] rounded-xl dark:bg-[#141718]">
             {tabNav.map((button, index) => (
               <Tab
@@ -27,10 +43,10 @@ const Form = () => {
           </TabList>
           <TabPanels>
             <TabPanel>
-              <SignIn onClick={() => setForgot(true)} />
+              <SignIn onForgotPassword={() => setForgot(true)} notice={notice} />
             </TabPanel>
             <TabPanel>
-              <CreateAccount />
+              <CreateAccount onSuccess={handleSignUpSuccess} />
             </TabPanel>
           </TabPanels>
         </TabGroup>
