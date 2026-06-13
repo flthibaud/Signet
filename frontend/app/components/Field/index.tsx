@@ -53,7 +53,7 @@ const Field = forwardRef<HTMLInputElement | HTMLTextAreaElement, FieldProps>(
             ) : (
               <input
                 className={twMerge(
-                  `w-full h-13 px-3.5 bg-[#F3F5F7] border-2 border-[#F3F5F7] rounded-xl base2 text-[#141718] outline-none transition-colors placeholder:text-[#6C7275]/50 focus:bg-transparent dark:bg-[#232627] dark:border-[#232627] dark:text-n-3 dark:focus:bg-transparent ${
+                  `w-full h-13 px-3.5 bg-[#F3F5F7] border-2 border-[#F3F5F7] rounded-xl base2 text-[#141718] outline-none transition-colors placeholder:text-[#6C7275]/50 focus:bg-transparent dark:bg-[#232627] dark:border-[#232627] dark:text-[#E8ECEF] dark:focus:bg-transparent ${
                     Icon && "pl-12.5"
                   } ${classInput} ${errorClass}`,
                 )}

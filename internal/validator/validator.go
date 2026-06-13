@@ -68,7 +68,13 @@ func Unique[T comparable](values []T) bool {
 	return len(values) == len(uniqueValues)
 }
 
+// IsURL reports whether str is a syntactically valid absolute http(s) URL.
+// Only the http and https schemes are accepted so that values like
+// "ftp://..." or "javascript://..." are rejected.
 func IsURL(str string) bool {
 	u, err := url.Parse(str)
-	return err == nil && u.Scheme != "" && u.Host != ""
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }

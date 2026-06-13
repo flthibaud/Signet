@@ -141,6 +141,28 @@ func (m SubscriptionModel) GetSubscriberIDs(ctx context.Context, feedID int64) (
 	return userIDs, rows.Err()
 }
 
+// Delete removes a subscription belonging to the given user. It returns
+// ErrRecordNotFound if no matching subscription exists (either it never existed
+// or it belongs to another user).
+func (m SubscriptionModel) Delete(ctx context.Context, userID uuid.UUID, id int64) error {
+	query := `DELETE FROM subscriptions WHERE id = $1 AND user_id = $2`
+
+	result, err := m.DB.ExecContext(ctx, query, id, userID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrRecordNotFound
+	}
+
+	return nil
+}
+
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
 	query := `
 		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, created_at)

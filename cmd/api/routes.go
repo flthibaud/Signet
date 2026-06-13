@@ -26,6 +26,7 @@ func (app *application) routes() http.Handler {
 	// Subscriptions
 	router.HandlerFunc(http.MethodGet, "/v1/subscriptions", app.listSubscriptionsHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/subscriptions", app.createSubscriptionHandler)
+	router.HandlerFunc(http.MethodDelete, "/v1/subscriptions/:id", app.deleteSubscriptionHandler)
 
 	// Articles d'un feed
 	// router.HandlerFunc(http.MethodGet, "/v1/subscriptions/:id/articles", app.listSubscriptionArticlesHandler)

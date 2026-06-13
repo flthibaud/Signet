@@ -45,12 +45,16 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 	if feed == nil {
 		feed, err = app.services.FeedService.CreateFromURL(r.Context(), input.URL)
 		if err != nil {
-			// Gestion d'erreur spécifique
+			// Renvoie les erreurs liées au feed comme erreurs de validation sur le
+			// champ "url" afin que le client puisse les afficher au bon endroit,
+			// sans exposer les détails internes du parser.
 			switch {
 			case errors.Is(err, service.ErrInvalidFeed):
-				app.badRequestResponse(w, r, err)
+				v.AddError("url", "the URL does not point to a valid RSS feed")
+				app.failedValidationResponse(w, r, v.Errors)
 			case errors.Is(err, service.ErrFeedNotFound):
-				app.notFoundResponse(w, r)
+				v.AddError("url", "the feed could not be reached")
+				app.failedValidationResponse(w, r, v.Errors)
 			default:
 				app.serverErrorResponse(w, r, err)
 			}
@@ -96,6 +100,32 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		"subscription": subscription,
 		"message":      "Subscription created. Articles are being imported in the background.",
 	}, nil)
+}
+
+func (app *application) deleteSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := app.readIDParam(r)
+	if err != nil {
+		app.notFoundResponse(w, r)
+		return
+	}
+
+	userID := app.contextGetUser(r).ID
+
+	err = app.models.Subscriptions.Delete(r.Context(), userID, id)
+	if err != nil {
+		switch {
+		case errors.Is(err, data.ErrRecordNotFound):
+			app.notFoundResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
+		return
+	}
+
+	err = app.writeJSON(w, http.StatusOK, envelope{"message": "subscription successfully deleted"}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
 }
 
 func (app *application) listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
