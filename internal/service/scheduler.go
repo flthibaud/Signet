@@ -20,11 +20,14 @@ type Scheduler struct {
 	workers        int
 	batchSize      int
 	quit           chan struct{}
+	ctx            context.Context    // cancelled on Stop to abort in-flight syncs
+	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 	domainLimiters sync.Map // map[string]*rate.Limiter
 }
 
 func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		services:  services,
 		logger:    logger,
@@ -32,6 +35,8 @@ func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Dura
 		workers:   workers,
 		batchSize: batchSize,
 		quit:      make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
@@ -64,13 +69,14 @@ func (s *Scheduler) Start() {
 
 func (s *Scheduler) Stop() {
 	s.logger.PrintInfo("scheduler stopping, waiting for workers...", nil)
-	close(s.quit)
+	close(s.quit) // stop scheduling new ticks
+	s.cancel()    // abort any in-flight feed syncs
 	s.wg.Wait()
 	s.logger.PrintInfo("scheduler stopped", nil)
 }
 
 func (s *Scheduler) syncFeeds() {
-	ctx := context.Background()
+	ctx := s.ctx
 
 	feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize)
 	if err != nil {

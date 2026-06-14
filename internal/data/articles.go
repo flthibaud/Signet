@@ -65,15 +65,7 @@ func (m ArticleModel) GetByHash(ctx context.Context, hash string) (*Article, err
 	return &article, nil
 }
 
-// 1. Vérifier si un article existe
-func (m ArticleModel) GetIDByURL(ctx context.Context, url string) (int64, error) {
-	var id int64
-	query := `SELECT id FROM articles WHERE url = $1`
-	err := m.DB.QueryRowContext(ctx, query, url).Scan(&id)
-	return id, err
-}
-
-// 2. Insérer un article
+// Insérer un article
 func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 	// ON CONFLICT (hash) DO UPDATE is a no-op upsert: if a concurrent worker
 	// already inserted this article (two feeds can share the same URL), we don't
@@ -134,10 +126,3 @@ func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 	return &article, nil
 }
 
-func (m ArticleModel) Update(ctx context.Context, article *Article) error {
-	return nil
-}
-
-func (m ArticleModel) Delete(ctx context.Context, id int64) error {
-	return nil
-}

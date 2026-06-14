@@ -58,8 +58,15 @@ func NewFeedService(models data.Models) *FeedService {
 
 // CreateFromURL crée un feed depuis une URL RSS
 func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.Feed, error) {
-	// 1. Fetch le RSS
-	resp, err := s.client.Get(feedURL)
+	// 1. Fetch le RSS (avec User-Agent : certains serveurs rejettent les
+	// requêtes sans en-tête UA).
+	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrFeedNotFound, err)
+	}
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrFeedNotFound, err)
 	}
@@ -127,7 +134,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		Author:       getAuthor(item),
 		ImageURL:     getItemImageURL(item),
 		PageType:     "article",
-		ReadingTime:  0, // @TODO: Calculer le temps de lecture
+		ReadingTime:  estimateReadingTime(textContent),
 		OriginalHTML: originalHTML,
 		TextContent:  textContent,
 		PublishedAt:  getPublishedDate(item),
@@ -152,8 +159,7 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	// 1. Build HTTP request with conditional headers
 	req, err := http.NewRequestWithContext(ctx, "GET", feed.Url, nil)
 	if err != nil {
-		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
-		return err
+		return s.markFailed(ctx, feed.ID, err)
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	if feed.HttpEtag != "" {
@@ -166,8 +172,7 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	// 2. Execute request
 	resp, err := s.client.Do(req)
 	if err != nil {
-		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
-		return err
+		return s.markFailed(ctx, feed.ID, err)
 	}
 	defer resp.Body.Close()
 
@@ -178,26 +183,31 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 
 	// 4. Handle error status codes
 	if resp.StatusCode != http.StatusOK {
-		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
-		return fmt.Errorf("feed %d returned status %d", feed.ID, resp.StatusCode)
+		return s.markFailed(ctx, feed.ID, fmt.Errorf("feed %d returned status %d", feed.ID, resp.StatusCode))
 	}
 
 	// 5. Parse feed
 	parsedFeed, err := s.parser.Parse(resp.Body)
 	if err != nil {
-		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
-		return err
+		return s.markFailed(ctx, feed.ID, err)
 	}
 
-	// 6. Get HTTP caching headers from response
+	// 6. Get HTTP caching headers from response. If the server omits one, keep
+	// the previous value rather than clearing it, so we don't lose conditional
+	// fetching on the next tick.
 	newEtag := resp.Header.Get("ETag")
+	if newEtag == "" {
+		newEtag = feed.HttpEtag
+	}
 	newLastModified := resp.Header.Get("Last-Modified")
+	if newLastModified == "" {
+		newLastModified = feed.HttpLastModified
+	}
 
 	// 7. Get all subscriber IDs
 	subscriberIDs, err := s.models.Subscriptions.GetSubscriberIDs(ctx, feed.ID)
 	if err != nil {
-		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
-		return err
+		return s.markFailed(ctx, feed.ID, err)
 	}
 
 	// 8. Process each item. If any item fails, we must NOT persist the new
@@ -253,6 +263,39 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 		return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, feed.HttpEtag, feed.HttpLastModified)
 	}
 	return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, newEtag, newLastModified)
+}
+
+// markFailed records a feed failure (clearing the lock, incrementing the
+// counter, deactivating after the threshold) and returns an error mentioning
+// the deactivation so the caller logs it. The DB write uses a detached context
+// so it still runs if the processing deadline has already fired.
+func (s *FeedService) markFailed(ctx context.Context, feedID int64, cause error) error {
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	failures, err := s.models.Feeds.MarkFeedFailed(dbCtx, feedID)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("marking feed %d failed: %w", feedID, err))
+	}
+	if failures >= 10 {
+		return fmt.Errorf("feed %d deactivated after %d consecutive failures: %w", feedID, failures, cause)
+	}
+	return cause
+}
+
+// estimateReadingTime returns an estimated reading time in minutes from the
+// article text, assuming ~200 words per minute. Capped at 500 to satisfy the
+// articles.reading_time_minutes CHECK constraint.
+func estimateReadingTime(text string) float64 {
+	words := len(strings.Fields(text))
+	if words == 0 {
+		return 0
+	}
+	minutes := float64(words) / 200.0
+	if minutes > 500 {
+		return 500
+	}
+	return minutes
 }
 
 // slugFromHash generates a URL-friendly slug from an article hash.

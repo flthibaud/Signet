@@ -108,20 +108,6 @@ func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 	return &feed, nil
 }
 
-func (m FeedModel) UpdateLastFetched(ctx context.Context, feedID int64) error {
-	query := `
-		UPDATE feeds
-		SET last_fetched_at = $1
-		WHERE id = $2`
-
-	_, err := m.DB.ExecContext(ctx, query, time.Now(), feedID)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // GetFeedsToSync atomically claims a batch of feeds ready for synchronization.
 // Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
 func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int) ([]*Feed, error) {
