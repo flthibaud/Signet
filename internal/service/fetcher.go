@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	readability "codeberg.org/readeck/go-readability/v2"
@@ -18,6 +19,7 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -27,11 +29,20 @@ var (
 
 const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+// feedProcessTimeout bounds how long a single feed sync may run. It must stay
+// below the GetFeedsToSync lock window (10 minutes) so we always release the
+// feed before another worker considers the lock stale and reclaims it.
+const feedProcessTimeout = 8 * time.Minute
+
 type FeedService struct {
 	models      data.Models
 	client      *http.Client
 	parser      *gofeed.Parser
 	readability *readabilitymd.Readability
+
+	// scrapeLimiters rate-limits readability fetches per source domain (1 req/s),
+	// so distributing many new articles from one site doesn't hammer it.
+	scrapeLimiters sync.Map // map[string]*rate.Limiter
 }
 
 func NewFeedService(models data.Models) *FeedService {
@@ -93,7 +104,7 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash string) (*data.Article, error) {
 	strip := bluemonday.StrictPolicy()
 
-	parsed, err := s.fetchWithReadability(item.Link)
+	parsed, err := s.fetchWithReadability(ctx, item.Link)
 
 	var title, originalHTML, textContent string
 
@@ -133,12 +144,18 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 // ImportArticlesForSubscribers fetches a feed with conditional HTTP headers
 // and distributes new articles to all subscribers via bulk insert.
 func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) error {
+	// Bound the whole feed processing below the lock window so we always release
+	// the feed before another worker can reclaim the (stale) lock.
+	ctx, cancel := context.WithTimeout(ctx, feedProcessTimeout)
+	defer cancel()
+
 	// 1. Build HTTP request with conditional headers
 	req, err := http.NewRequestWithContext(ctx, "GET", feed.Url, nil)
 	if err != nil {
 		s.models.Feeds.MarkFeedFailed(ctx, feed.ID)
 		return err
 	}
+	req.Header.Set("User-Agent", UserAgent)
 	if feed.HttpEtag != "" {
 		req.Header.Set("If-None-Match", feed.HttpEtag)
 	}
@@ -183,13 +200,24 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 		return err
 	}
 
-	// 8. Process each item
+	// 8. Process each item. If any item fails, we must NOT persist the new
+	// ETag/Last-Modified, otherwise the next fetch gets a 304 and the items we
+	// missed are never retried.
+	itemsFailed := false
 	for _, item := range parsedFeed.Items {
+		// Stop if we've hit the processing deadline (or the app is shutting
+		// down): the remaining items will be retried on the next tick.
+		if ctx.Err() != nil {
+			itemsFailed = true
+			break
+		}
+
 		hash := hashURL(item.Link)
 
 		// Check if article already exists
 		article, err := s.models.Articles.GetByHash(ctx, hash)
 		if err != nil && err != data.ErrRecordNotFound {
+			itemsFailed = true
 			continue
 		}
 
@@ -197,6 +225,7 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 		if article == nil {
 			article, err = s.createArticleFromItem(ctx, item, hash)
 			if err != nil {
+				itemsFailed = true
 				continue
 			}
 		}
@@ -204,12 +233,26 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 		// Bulk insert links for all subscribers
 		if len(subscriberIDs) > 0 {
 			baseSlug := slugFromHash(hash)
-			_ = s.models.Links.BulkInsertForArticle(ctx, subscriberIDs, article.ID, feed.ID, baseSlug)
+			if err := s.models.Links.BulkInsertForArticle(ctx, subscriberIDs, article.ID, feed.ID, baseSlug); err != nil {
+				itemsFailed = true
+			}
 		}
 	}
 
-	// 9. Release feed with updated caching headers
-	return s.models.Feeds.ReleaseFeed(ctx, feed.ID, newEtag, newLastModified)
+	// 9. Release feed. Only advance the caching headers when every item
+	// succeeded; on partial failure we keep the previous headers so the feed is
+	// fully re-fetched (no 304) next time.
+	//
+	// Use a context detached from cancellation: when we break out of the loop on
+	// a hit deadline, ctx is already done and the release (which clears the lock)
+	// must still run.
+	releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelRelease()
+
+	if itemsFailed {
+		return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, feed.HttpEtag, feed.HttpLastModified)
+	}
+	return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, newEtag, newLastModified)
 }
 
 // slugFromHash generates a URL-friendly slug from an article hash.
@@ -221,25 +264,30 @@ func slugFromHash(hash string) string {
 }
 
 // fetchWithReadability tente de fetch avec un User-Agent réaliste
-func (s *FeedService) fetchWithReadability(articleURL string) (readability.Article, error) {
+func (s *FeedService) fetchWithReadability(ctx context.Context, articleURL string) (readability.Article, error) {
 	baseURL, err := url.Parse(articleURL)
 	if err != nil {
 		return readability.Article{}, err
 	}
 
-	// Crée une requête HTTP custom avec User-Agent
-	req, err := http.NewRequest("GET", baseURL.String(), nil)
+	// Respecte un rate limit par domaine pour ne pas marteler le site source
+	// quand on scrape plusieurs nouveaux articles du même flux.
+	if err := s.scrapeLimiter(baseURL.Host).Wait(ctx); err != nil {
+		return readability.Article{}, err
+	}
+
+	// Crée une requête HTTP custom avec User-Agent, liée au contexte pour être
+	// annulable (deadline de traitement du feed, arrêt de l'application).
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL.String(), nil)
 	if err != nil {
 		return readability.Article{}, err
 	}
 
 	req.Header.Set("User-Agent", UserAgent)
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	resp, err := client.Do(req)
+	// Réutilise le client partagé (pool de connexions) plutôt que d'en créer un
+	// par article.
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return readability.Article{}, err
 	}
@@ -247,6 +295,17 @@ func (s *FeedService) fetchWithReadability(articleURL string) (readability.Artic
 
 	// Parse avec readability
 	return readability.FromReader(resp.Body, baseURL)
+}
+
+// scrapeLimiter returns the per-domain rate limiter for readability fetches,
+// creating it (1 req/s) on first use.
+func (s *FeedService) scrapeLimiter(domain string) *rate.Limiter {
+	if v, ok := s.scrapeLimiters.Load(domain); ok {
+		return v.(*rate.Limiter)
+	}
+	limiter := rate.NewLimiter(rate.Every(time.Second), 1)
+	actual, _ := s.scrapeLimiters.LoadOrStore(domain, limiter)
+	return actual.(*rate.Limiter)
 }
 
 // hashURL calcule le hash SHA256 d'une URL

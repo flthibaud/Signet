@@ -75,9 +75,13 @@ func (m ArticleModel) GetIDByURL(ctx context.Context, url string) (int64, error)
 
 // 2. Insérer un article
 func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
+	// ON CONFLICT (hash) DO UPDATE is a no-op upsert: if a concurrent worker
+	// already inserted this article (two feeds can share the same URL), we don't
+	// fail, we just return the existing id. DO NOTHING would return no row.
 	query := `
 		INSERT INTO articles (url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		ON CONFLICT (hash) DO UPDATE SET hash = articles.hash
 		RETURNING id
 	`
 

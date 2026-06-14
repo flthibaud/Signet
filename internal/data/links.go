@@ -209,19 +209,18 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
 		VALUES `
 
+	// Each user has its own slug namespace (UNIQUE(user_id, slug)), so every
+	// subscriber gets the same baseSlug. The previous per-position "-i" suffix
+	// produced non-deterministic, ugly slugs (subscriber order isn't stable).
 	args := []any{}
 	for i, uid := range userIDs {
 		if i > 0 {
 			query += ", "
 		}
-		slug := baseSlug
-		if i > 0 {
-			slug = fmt.Sprintf("%s-%d", baseSlug, i)
-		}
-		paramBase := i * 5
+		paramBase := i * 4
 		query += fmt.Sprintf("($%d, $%d, $%d, $%d, NOW(), NOW())",
 			paramBase+1, paramBase+2, paramBase+3, paramBase+4)
-		args = append(args, uid, articleID, feedID, slug)
+		args = append(args, uid, articleID, feedID, baseSlug)
 	}
 
 	query += " ON CONFLICT (user_id, article_id) DO NOTHING"
