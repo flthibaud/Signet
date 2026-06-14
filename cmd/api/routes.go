@@ -36,6 +36,7 @@ func (app *application) routes() http.Handler {
 
 	// Recuperer le contenu d'un article
 	router.HandlerFunc(http.MethodGet, "/v1/links/:slug", app.getLinkHandler)
+	router.HandlerFunc(http.MethodPatch, "/v1/links/:slug", app.updateLinkHandler)
 
 	// Serve embedded frontend (React Router SPA build)
 	distFS, err := fs.Sub(origami.FrontendDist, "frontend/build/client")

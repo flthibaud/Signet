@@ -70,7 +70,8 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 	}
 
 	if exists {
-		app.alreadyExistsResponse(w, r)
+		v.AddError("url", "you are already subscribed to this feed")
+		app.failedValidationResponse(w, r, v.Errors)
 		return
 	}
 

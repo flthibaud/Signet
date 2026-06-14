@@ -234,6 +234,30 @@ func (m LinkModel) Update(ctx context.Context, link *Link) error {
 	return nil
 }
 
+// SetReadStatus updates the read flag of a user's link, identified by slug.
+// It returns ErrRecordNotFound if no matching link exists for that user.
+func (m LinkModel) SetReadStatus(ctx context.Context, userID uuid.UUID, slug string, isRead bool) error {
+	query := `
+		UPDATE links
+		SET is_read = $1, updated_at = NOW()
+		WHERE slug = $2 AND user_id = $3`
+
+	result, err := m.DB.ExecContext(ctx, query, isRead, slug, userID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrRecordNotFound
+	}
+
+	return nil
+}
+
 func (m LinkModel) Delete(ctx context.Context, id int64) error {
 	return nil
 }

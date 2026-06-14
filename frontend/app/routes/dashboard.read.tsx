@@ -1,9 +1,10 @@
-import { isValidElement, useMemo, useRef, type ReactNode } from "react";
+import { isValidElement, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router";
 import Markdown from "react-markdown";
 import { extractHeadings } from "~/utils/extractHeadings";
 import { slugify } from "~/utils/slugify";
+import { useUpdateLink } from "~/lib/links";
 
 import TableOfContents from "~/components/Links/TableOfContents";
 
@@ -36,6 +37,16 @@ export default function ArticlePage() {
     () => (link?.text_content ? extractHeadings(link.text_content) : []),
     [link?.text_content],
   );
+
+  // Mark the article as read once it has been opened, which decrements the
+  // feed's unread badge. The cache patch in useUpdateLink flips is_read, so
+  // this fires at most once per article.
+  const updateLink = useUpdateLink();
+  useEffect(() => {
+    if (link && !link.is_read) {
+      updateLink.mutate({ slug: link.slug, isRead: true });
+    }
+  }, [link?.slug, link?.is_read]);
 
   if (isLoading) {
     return (
