@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A self-hosted read-it-later app with native RSS/Atom support, inspired by the discontinued Omnivore. A single Go binary serves both the JSON API and the embedded React Router frontend, backed by PostgreSQL. Key design goals: deploy as one binary + one database, RSS as a first-class citizen, and deduplication (an article saved by N users is stored once).
 
-The Go module is `github.com/flthibaud/origami`. A rename to "Glane" is in progress — the user-facing name may change, but the module path and `origami` package have not been renamed yet.
+The app is named **Signet**. The Go module is `github.com/flthibaud/signet` (root package `signet`), hosted at github.com/flthibaud/Signet.
 
 ## Commands
 

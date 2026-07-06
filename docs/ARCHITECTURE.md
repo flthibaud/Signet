@@ -1,4 +1,4 @@
-# Architecture Origami
+# Architecture Signet
 
 ## Table des matières
 
@@ -17,7 +17,7 @@
 
 ## Vue d'ensemble
 
-Origami est un lecteur "read-it-later" avec support natif des flux RSS/Atom, écrit en Go. L'architecture repose sur une séparation claire entre :
+Signet est un lecteur "read-it-later" avec support natif des flux RSS/Atom, écrit en Go. L'architecture repose sur une séparation claire entre :
 
 - **Le contenu partagé** : Articles stockés une seule fois
 - **Les données personnelles** : État de lecture et organisation par utilisateur
@@ -35,7 +35,7 @@ Origami est un lecteur "read-it-later" avec support natif des flux RSS/Atom, éc
 ## Structure du projet
 
 ```
-origami/
+signet/
 ├── cmd/
 │   └── api/                    # Point d'entrée de l'API
 │       ├── main.go             # Bootstrap, config, démarrage

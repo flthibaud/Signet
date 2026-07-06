@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flthibaud/origami/internal/validator"
+	"github.com/flthibaud/signet/internal/validator"
 )
 
 func TestValidateEmail(t *testing.T) {

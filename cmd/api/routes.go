@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 
-	"github.com/flthibaud/origami"
+	"github.com/flthibaud/signet"
 	"github.com/julienschmidt/httprouter"
 )
 
@@ -40,7 +40,7 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodPatch, "/v1/links/:slug", app.updateLinkHandler)
 
 	// Serve embedded frontend (React Router SPA build)
-	distFS, err := fs.Sub(origami.FrontendDist, "frontend/build/client")
+	distFS, err := fs.Sub(signet.FrontendDist, "frontend/build/client")
 	if err != nil {
 		panic(err)
 	}

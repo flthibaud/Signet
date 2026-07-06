@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/flthibaud/origami/internal/validator"
+	"github.com/flthibaud/signet/internal/validator"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )

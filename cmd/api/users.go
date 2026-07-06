@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/flthibaud/origami/internal/data"
-	"github.com/flthibaud/origami/internal/validator"
+	"github.com/flthibaud/signet/internal/data"
+	"github.com/flthibaud/signet/internal/validator"
 )
 
 func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Request) {

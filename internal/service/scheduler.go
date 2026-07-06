@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flthibaud/origami/internal/data"
-	"github.com/flthibaud/origami/internal/jsonlog"
+	"github.com/flthibaud/signet/internal/data"
+	"github.com/flthibaud/signet/internal/jsonlog"
 	"golang.org/x/time/rate"
 )
 

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	readability "codeberg.org/readeck/go-readability/v2"
-	"github.com/flthibaud/origami/internal/data"
-	readabilitymd "github.com/flthibaud/origami/internal/readability"
+	"github.com/flthibaud/signet/internal/data"
+	readabilitymd "github.com/flthibaud/signet/internal/readability"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"

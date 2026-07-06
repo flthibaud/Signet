@@ -1,4 +1,4 @@
-# Origami
+# Signet
 
 Une application **read-it-later** self-hosted avec support natif des flux **RSS/Atom**, écrite en **Go** (API) et **React Router v7** (frontend).
 
@@ -106,7 +106,7 @@ Créer un fichier `.env` à la racine :
 ```env
 ENV=development
 PORT=4000
-DATABASE_URI=postgres://user:password@localhost:5432/origami?sslmode=disable
+DATABASE_URI=postgres://user:password@localhost:5432/signet?sslmode=disable
 RATE_LIMITER_RPS=2
 RATE_LIMITER_BURST=4
 RATE_LIMITER_ENABLED=true
@@ -157,7 +157,7 @@ Un [Dockerfile](Dockerfile) multi-stages est également disponible pour le build
 ## Structure du projet
 
 ```
-origami/
+signet/
 ├── cmd/api/            # Point d'entrée de l'API
 ├── internal/
 │   ├── data/           # Couche d'accès aux données

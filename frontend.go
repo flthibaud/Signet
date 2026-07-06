@@ -1,4 +1,4 @@
-package origami
+package signet
 
 import "embed"
 

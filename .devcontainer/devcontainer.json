@@ -1,5 +1,5 @@
 {
-  "name": "origami-devcontainer",
+  "name": "signet-devcontainer",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",

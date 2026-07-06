@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flthibaud/origami/internal/data"
+	"github.com/flthibaud/signet/internal/data"
 	"github.com/julienschmidt/httprouter"
 )
 

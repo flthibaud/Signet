@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/flthibaud/origami/internal/data"
-	"github.com/flthibaud/origami/internal/validator"
+	"github.com/flthibaud/signet/internal/data"
+	"github.com/flthibaud/signet/internal/validator"
 )
 
 const (
