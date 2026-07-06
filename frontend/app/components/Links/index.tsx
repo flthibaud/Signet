@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   Archive,
@@ -25,11 +25,25 @@ const FILTERS = [
 
 type FilterId = (typeof FILTERS)[number]["id"];
 
+// The list scrolls inside its own container, so the browser's native scroll
+// restoration can't help when navigating to an article and back. Position and
+// active filter are kept in sessionStorage and restored on mount.
+const SCROLL_KEY = "links:scroll";
+const FILTER_KEY = "links:filter";
+
+function savedFilter(): FilterId {
+  const saved = sessionStorage.getItem(FILTER_KEY);
+  return FILTERS.some((f) => f.id === saved) ? (saved as FilterId) : "all";
+}
+
 export const Links = () => {
   const loaderRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollPosRef = useRef(0);
+  const scrollRestoredRef = useRef(false);
   const updateLink = useUpdateLink();
 
-  const [filter, setFilter] = useState<FilterId>("all");
+  const [filter, setFilter] = useState<FilterId>(savedFilter);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isBulkPending, setIsBulkPending] = useState(false);
 
@@ -56,7 +70,46 @@ export const Links = () => {
   const changeFilter = (id: FilterId) => {
     setFilter(id);
     setSelected(new Set());
+    sessionStorage.setItem(FILTER_KEY, id);
+    // A new filter means a new list: start back at the top.
+    scrollPosRef.current = 0;
+    sessionStorage.removeItem(SCROLL_KEY);
+    scrollContainerRef.current?.scrollTo({ top: 0 });
   };
+
+  // Track the container's scroll position and persist it when the list
+  // unmounts (i.e. when navigating to an article).
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      scrollPosRef.current = el.scrollTop;
+    };
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      sessionStorage.setItem(SCROLL_KEY, String(scrollPosRef.current));
+    };
+  }, []);
+
+  // Restore the saved position once the cached pages have rendered, before
+  // the browser paints, so coming back from an article doesn't flash the top
+  // of the list.
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || scrollRestoredRef.current || links.length === 0) return;
+    scrollRestoredRef.current = true;
+
+    const saved = Number(sessionStorage.getItem(SCROLL_KEY) ?? 0);
+    if (saved > 0) {
+      // "instant" overrides the container's scroll-smooth, which would
+      // otherwise animate the restoration from the top.
+      el.scrollTo({ top: saved, behavior: "instant" });
+      scrollPosRef.current = el.scrollTop;
+    }
+  }, [links.length]);
 
   const toggleSelected = (slug: string) => {
     setSelected((prev) => {
@@ -182,7 +235,10 @@ export const Links = () => {
         )}
       </div>
 
-      <div className="grow px-6 py-6 overflow-y-auto scroll-smooth md:px-4 md:pb-6">
+      <div
+        ref={scrollContainerRef}
+        className="grow px-6 py-6 overflow-y-auto scroll-smooth md:px-4 md:pb-6"
+      >
         <div className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
           {links.map((link) => {
             const progress = link.is_read
