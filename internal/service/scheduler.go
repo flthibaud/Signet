@@ -20,7 +20,7 @@ type Scheduler struct {
 	workers        int
 	batchSize      int
 	quit           chan struct{}
-	ctx            context.Context    // cancelled on Stop to abort in-flight syncs
+	ctx            context.Context // cancelled on Stop to abort in-flight syncs
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 	domainLimiters sync.Map // map[string]*rate.Limiter
@@ -47,9 +47,7 @@ func (s *Scheduler) Start() {
 		"batch_size": strconv.Itoa(s.batchSize),
 	})
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 
@@ -64,7 +62,7 @@ func (s *Scheduler) Start() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 func (s *Scheduler) Stop() {
@@ -101,13 +99,11 @@ func (s *Scheduler) syncFeeds() {
 
 	var workerWg sync.WaitGroup
 	for i := 0; i < s.workers; i++ {
-		workerWg.Add(1)
-		go func() {
-			defer workerWg.Done()
+		workerWg.Go(func() {
 			for job := range feedsChan {
 				s.processFeed(ctx, job)
 			}
-		}()
+		})
 	}
 	workerWg.Wait()
 }
