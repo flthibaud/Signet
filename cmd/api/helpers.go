@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,34 @@ func (app *application) readPagination(r *http.Request) Pagination {
 	}
 
 	return Pagination{Page: page, PageSize: pageSize}
+}
+
+// readOptionalBool parses an optional boolean query parameter. It returns nil
+// when the parameter is absent, and an error when the value isn't a boolean.
+func readOptionalBool(qs url.Values, key string) (*bool, error) {
+	v := qs.Get(key)
+	if v == "" {
+		return nil, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s parameter: must be true or false", key)
+	}
+	return &b, nil
+}
+
+// readOptionalInt64 parses an optional positive integer query parameter. It
+// returns nil when the parameter is absent.
+func readOptionalInt64(qs url.Values, key string) (*int64, error) {
+	v := qs.Get(key)
+	if v == "" {
+		return nil, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 1 {
+		return nil, fmt.Errorf("invalid %s parameter: must be a positive integer", key)
+	}
+	return &n, nil
 }
 
 // Retrieve the "id" URL parameter from the current request context, then convert it to

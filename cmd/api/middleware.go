@@ -108,8 +108,11 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 func (app *application) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Try to get the token from the Authorization header first, then fall back
-		// to the auth_token cookie.
+		// to the auth_token cookie. A malformed or expired cookie is treated as an
+		// anonymous request (not a 401): browsers keep sending stale cookies, and
+		// guest pages must stay reachable so the user can log in again.
 		var token string
+		var fromCookie bool
 
 		authorizationHeader := r.Header.Get("Authorization")
 
@@ -131,6 +134,7 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 				return
 			}
 			token = cookie.Value
+			fromCookie = true
 		}
 
 		// Validate the token to make sure it is in a sensible format.
@@ -140,6 +144,11 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		// helper to send a response, rather than the failedValidationResponse() helper
 		// that we'd normally use.
 		if data.ValidateTokenPlaintext(v, token); !v.Valid() {
+			if fromCookie {
+				r = app.contextSetUser(r, data.AnonymousUser)
+				next.ServeHTTP(w, r)
+				return
+			}
 			app.invalidAuthenticationTokenResponse(w, r)
 			return
 		}
@@ -152,6 +161,11 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		if err != nil {
 			switch {
 			case errors.Is(err, data.ErrRecordNotFound):
+				if fromCookie {
+					r = app.contextSetUser(r, data.AnonymousUser)
+					next.ServeHTTP(w, r)
+					return
+				}
 				app.invalidAuthenticationTokenResponse(w, r)
 			default:
 				app.serverErrorResponse(w, r, err)

@@ -3,7 +3,9 @@ package data
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,8 +56,46 @@ type LinkModel struct {
 	DB *sql.DB
 }
 
-func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*LinkWithArticle, int, error) {
-	query := `
+// LinkFilters narrows ListForUser results. Nil pointer fields are ignored.
+// Archived defaults to false, meaning only non-archived links are returned.
+type LinkFilters struct {
+	IsRead    *bool
+	IsStarred *bool
+	Archived  bool
+	FeedID    *int64
+}
+
+// buildLinkFiltersWhere returns the WHERE clauses and their args for f.
+// The first placeholder is $1 (userID); filter args start at $2.
+func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
+	where := []string{"l.user_id = $1"}
+	args := []any{userID}
+
+	if f.Archived {
+		where = append(where, "l.archived_at IS NOT NULL")
+	} else {
+		where = append(where, "l.archived_at IS NULL")
+	}
+	if f.IsRead != nil {
+		args = append(args, *f.IsRead)
+		where = append(where, fmt.Sprintf("l.is_read = $%d", len(args)))
+	}
+	if f.IsStarred != nil {
+		args = append(args, *f.IsStarred)
+		where = append(where, fmt.Sprintf("l.is_starred = $%d", len(args)))
+	}
+	if f.FeedID != nil {
+		args = append(args, *f.FeedID)
+		where = append(where, fmt.Sprintf("l.feed_id = $%d", len(args)))
+	}
+
+	return where, args
+}
+
+func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters LinkFilters, limit, offset int) ([]*LinkWithArticle, int, error) {
+	where, args := buildLinkFiltersWhere(userID, filters)
+
+	query := fmt.Sprintf(`
 		SELECT count(*) OVER(),
 			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
 			l.saved_at, l.created_at, l.updated_at,
@@ -64,12 +104,14 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, limit, off
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
 		LEFT JOIN feeds f ON l.feed_id = f.id
-		WHERE l.user_id = $1
-			AND l.archived_at IS NULL
+		WHERE %s
 		ORDER BY a.published_at DESC
-		LIMIT $2 OFFSET $3`
+		LIMIT $%d OFFSET $%d`,
+		strings.Join(where, " AND "), len(args)+1, len(args)+2)
 
-	rows, err := m.DB.QueryContext(ctx, query, userID, limit, offset)
+	args = append(args, limit, offset)
+
+	rows, err := m.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -145,8 +187,8 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 		&link.FeedTitle,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("link not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrRecordNotFound
 		}
 		return nil, err
 	}
@@ -202,15 +244,71 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 	return err
 }
 
-// SetReadStatus updates the read flag of a user's link, identified by slug.
-// It returns ErrRecordNotFound if no matching link exists for that user.
-func (m LinkModel) SetReadStatus(ctx context.Context, userID uuid.UUID, slug string, isRead bool) error {
-	query := `
-		UPDATE links
-		SET is_read = $1, updated_at = NOW()
-		WHERE slug = $2 AND user_id = $3`
+// LinkUpdate describes a partial update of a link's per-user state.
+// Nil fields are left unchanged. Archived toggles archived_at (NOW() / NULL).
+type LinkUpdate struct {
+	IsRead                     *bool
+	IsStarred                  *bool
+	Archived                   *bool
+	ReadingProgress            *float64
+	ReadingProgressAnchorIndex *int
+}
 
-	result, err := m.DB.ExecContext(ctx, query, isRead, slug, userID)
+func (u LinkUpdate) IsEmpty() bool {
+	return u.IsRead == nil && u.IsStarred == nil && u.Archived == nil &&
+		u.ReadingProgress == nil && u.ReadingProgressAnchorIndex == nil
+}
+
+// buildLinkUpdateSet returns the SET clauses and their args for u,
+// with placeholders numbered from $1.
+func buildLinkUpdateSet(u LinkUpdate) ([]string, []any) {
+	var set []string
+	var args []any
+
+	add := func(column string, val any) {
+		args = append(args, val)
+		set = append(set, fmt.Sprintf("%s = $%d", column, len(args)))
+	}
+
+	if u.IsRead != nil {
+		add("is_read", *u.IsRead)
+	}
+	if u.IsStarred != nil {
+		add("is_starred", *u.IsStarred)
+	}
+	if u.ReadingProgress != nil {
+		add("reading_progress", *u.ReadingProgress)
+	}
+	if u.ReadingProgressAnchorIndex != nil {
+		add("reading_progress_anchor_index", *u.ReadingProgressAnchorIndex)
+	}
+	if u.Archived != nil {
+		if *u.Archived {
+			set = append(set, "archived_at = NOW()")
+		} else {
+			set = append(set, "archived_at = NULL")
+		}
+	}
+
+	return set, args
+}
+
+// Update applies a partial update to a user's link, identified by slug.
+// It returns ErrRecordNotFound if no matching link exists for that user.
+func (m LinkModel) Update(ctx context.Context, userID uuid.UUID, slug string, upd LinkUpdate) error {
+	set, args := buildLinkUpdateSet(upd)
+	if len(set) == 0 {
+		return nil
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE links
+		SET %s, updated_at = NOW()
+		WHERE slug = $%d AND user_id = $%d`,
+		strings.Join(set, ", "), len(args)+1, len(args)+2)
+	args = append(args, slug, userID)
+
+	result, err := m.DB.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

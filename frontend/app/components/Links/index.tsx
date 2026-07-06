@@ -1,20 +1,21 @@
 import { useEffect, useRef } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Clock, Rss, Loader2 } from "lucide-react";
+import { Archive, Clock, Rss, Loader2, Star } from "lucide-react";
 import type { LinksResponse } from "~/types/link";
 import { formatDate } from "~/utils/formatDate";
 import { Link } from "react-router";
+import { apiFetch } from "~/lib/api";
+import { useUpdateLink } from "~/lib/links";
 
 export const Links = () => {
   const loaderRef = useRef<HTMLDivElement>(null);
+  const updateLink = useUpdateLink();
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<LinksResponse>({
       queryKey: ["links"],
-      queryFn: async ({ pageParam }) => {
-        const res = await fetch(`/v1/links?page=${pageParam}`);
-        return res.json();
-      },
+      queryFn: ({ pageParam }) =>
+        apiFetch<LinksResponse>(`/v1/links?page=${pageParam}`),
       initialPageParam: 1,
       getNextPageParam: (lastPage) =>
         lastPage.metadata.current_page < lastPage.metadata.total_pages
@@ -88,6 +89,46 @@ export const Links = () => {
                     {Math.round(link.reading_time_minutes)} min
                   </span>
                 )}
+
+                <span className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    title={link.is_starred ? "Unstar" : "Star"}
+                    className="p-1.5 rounded-md transition-colors hover:bg-gray-200 dark:hover:bg-gray-600/50"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      updateLink.mutate({
+                        slug: link.slug,
+                        isStarred: !link.is_starred,
+                      });
+                    }}
+                  >
+                    <Star
+                      size={16}
+                      className={
+                        link.is_starred
+                          ? "text-amber-400 fill-amber-400"
+                          : "text-gray-400 dark:text-gray-500"
+                      }
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    title="Archive"
+                    className="p-1.5 rounded-md transition-colors hover:bg-gray-200 dark:hover:bg-gray-600/50"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      updateLink.mutate({ slug: link.slug, archived: true });
+                    }}
+                  >
+                    <Archive
+                      size={16}
+                      className="text-gray-400 dark:text-gray-500"
+                    />
+                  </button>
+                </span>
               </div>
             </div>
           </article>

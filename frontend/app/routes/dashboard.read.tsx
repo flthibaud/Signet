@@ -4,7 +4,9 @@ import { useParams } from "react-router";
 import Markdown from "react-markdown";
 import { extractHeadings } from "~/utils/extractHeadings";
 import { slugify } from "~/utils/slugify";
+import { apiFetch } from "~/lib/api";
 import { useUpdateLink } from "~/lib/links";
+import type { LinkDetail } from "~/types/link";
 
 import TableOfContents from "~/components/Links/TableOfContents";
 
@@ -12,8 +14,8 @@ function getTextContent(node: ReactNode): string {
   if (typeof node === "string") return node;
   if (typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(getTextContent).join("");
-  if (isValidElement(node)) {
-    return getTextContent(node.props.children as ReactNode);
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return getTextContent(node.props.children);
   }
   return "";
 }
@@ -23,13 +25,7 @@ export default function ArticlePage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { data: article, isLoading, error } = useQuery({
     queryKey: ["article", slug],
-    queryFn: async () => {
-      const response = await fetch(`/v1/links/${slug}`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch article");
-      }
-      return response.json();
-    },
+    queryFn: () => apiFetch<{ link: LinkDetail }>(`/v1/links/${slug}`),
   });
 
   const link = article?.link;
@@ -56,10 +52,12 @@ export default function ArticlePage() {
     );
   }
 
-  if (error) {
+  if (error || !link) {
     return (
       <div className="flex items-center justify-center grow">
-        <p className="text-red-400 base1">Error: {error.message}</p>
+        <p className="text-red-400 base1">
+          Error: {error?.message ?? "Article not found"}
+        </p>
       </div>
     );
   }

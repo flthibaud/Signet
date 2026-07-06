@@ -79,7 +79,7 @@ func (app *application) createAuthenticationTokenHandler(w http.ResponseWriter, 
 		Value:    token.Plaintext,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   app.config.env == "production",
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(time.Until(token.Expiry).Seconds()),
 	})
@@ -87,6 +87,37 @@ func (app *application) createAuthenticationTokenHandler(w http.ResponseWriter, 
 	// Encode the token to JSON and send it in the response along with a 201 Created
 	// status code.
 	err = app.writeJSON(w, http.StatusCreated, envelope{"authentication_token": token}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
+}
+
+// deleteAuthenticationTokenHandler logs the user out: it deletes all of their
+// authentication tokens (invalidating every session) and clears the cookie.
+func (app *application) deleteAuthenticationTokenHandler(w http.ResponseWriter, r *http.Request) {
+	user := app.contextGetUser(r)
+
+	if !user.IsAnonymous() {
+		err := app.models.Tokens.DeleteAllForUser(data.ScopeAuthentication, user.ID)
+		if err != nil {
+			app.serverErrorResponse(w, r, err)
+			return
+		}
+	}
+
+	// Expire the cookie regardless of authentication state, so a stale or
+	// invalid cookie is cleaned up too.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   app.config.env == "production",
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+
+	err := app.writeJSON(w, http.StatusOK, envelope{"message": "successfully logged out"}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}

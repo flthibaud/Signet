@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { LogOut } from "lucide-react";
 import type { User } from "~/types/user";
+import { useSignOut } from "~/lib/auth";
 
 type ProfileProps = {
   visible?: boolean;
@@ -7,6 +9,7 @@ type ProfileProps = {
 
 const Profile = ({ visible }: ProfileProps) => {
   const [user, setUser] = useState<User | null>(null);
+  const signOut = useSignOut();
 
   useEffect(() => {
     fetch("/v1/users/me")
@@ -38,7 +41,7 @@ const Profile = ({ visible }: ProfileProps) => {
           </div>
           {visible && (
             <>
-              <div className="ml-4">
+              <div className="ml-4 min-w-0">
                 <div className="base2 font-semibold text-[#FEFEFE]">
                   {user?.username}
                 </div>
@@ -46,6 +49,15 @@ const Profile = ({ visible }: ProfileProps) => {
                   {user?.email}
                 </div>
               </div>
+              <button
+                type="button"
+                title="Log out"
+                disabled={signOut.isPending}
+                onClick={() => signOut.mutate()}
+                className="ml-auto p-2 rounded-lg text-[#E8ECEF]/50 transition-colors hover:text-[#FEFEFE] hover:bg-[#141718] disabled:opacity-50"
+              >
+                <LogOut size={18} />
+              </button>
             </>
           )}
         </div>

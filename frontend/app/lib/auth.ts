@@ -18,6 +18,21 @@ export function useSignIn() {
 }
 
 /**
+ * Logs the user out. The backend invalidates every session token and expires
+ * the cookie; a full page navigation then clears all client-side state and
+ * lets the server redirect to the guest pages.
+ */
+export function useSignOut() {
+  return useMutation({
+    mutationFn: () =>
+      apiFetch("/v1/tokens/authentication", { method: "DELETE" }),
+    onSuccess: () => {
+      window.location.assign("/auth");
+    },
+  });
+}
+
+/**
  * Registers a new user. The backend does not return a session here, so the
  * caller is expected to send the user to the sign-in form afterwards.
  */
