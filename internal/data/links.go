@@ -20,6 +20,7 @@ type Link struct {
 	ArticleUrl                        string    `json:"article_url"`
 	IsRead                            bool      `json:"is_read"`
 	IsStarred                         bool      `json:"is_starred"`
+	ReadingProgress                   float64   `json:"reading_progress"`
 	ArticleReadingProgressAnchorIndex int       `json:"article_reading_progress_anchor_index"`
 	FeedID                            *int64    `json:"feed_id"`
 	CreatedAt                         time.Time `json:"created_at"`
@@ -97,7 +98,7 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 
 	query := fmt.Sprintf(`
 		SELECT count(*) OVER(),
-			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
+			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.saved_at, l.created_at, l.updated_at,
 			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, a.published_at,
 			f.original_title
@@ -130,6 +131,7 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 			&link.FeedID,
 			&link.IsRead,
 			&link.IsStarred,
+			&link.ReadingProgress,
 			&link.SavedAt,
 			&link.CreatedAt,
 			&link.UpdatedAt,
@@ -157,7 +159,7 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 
 func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID) (*LinkDetail, error) {
 	query := `
-		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred,
+		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.saved_at, l.created_at, l.updated_at,
 			a.title, a.author, a.image_url, a.reading_time_minutes,
 			a.text_content, a.published_at,
@@ -175,6 +177,7 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 		&link.FeedID,
 		&link.IsRead,
 		&link.IsStarred,
+		&link.ReadingProgress,
 		&link.SavedAt,
 		&link.CreatedAt,
 		&link.UpdatedAt,

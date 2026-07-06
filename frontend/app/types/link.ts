@@ -10,6 +10,7 @@ export interface Link {
   published_at: string;
   is_read: boolean;
   is_starred: boolean;
+  reading_progress: number;
 }
 
 export interface LinkDetail {
@@ -25,6 +26,7 @@ export interface LinkDetail {
   saved_at: string;
   is_read: boolean;
   is_starred: boolean;
+  reading_progress: number;
 }
 
 export interface LinksResponse {

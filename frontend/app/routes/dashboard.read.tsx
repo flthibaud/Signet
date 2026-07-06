@@ -34,15 +34,77 @@ export default function ArticlePage() {
     [link?.text_content],
   );
 
-  // Mark the article as read once it has been opened, which decrements the
-  // feed's unread badge. The cache patch in useUpdateLink flips is_read, so
-  // this fires at most once per article.
+  // Reading progress tracking. The scroll position maps to a 0..1 progress
+  // value; we keep the maximum reached in this session (scrolling back up
+  // doesn't regress it), persist it periodically and when leaving the page,
+  // and flip is_read once the reader gets close enough to the end.
   const updateLink = useUpdateLink();
+  const progressRef = useRef(0); // max progress reached
+  const lastSavedRef = useRef(0); // last value sent to the API
+  const markedReadRef = useRef(false);
+  const restoredRef = useRef(false);
+
+  // Restore the saved position once the article content is rendered.
   useEffect(() => {
-    if (link && !link.is_read) {
-      updateLink.mutate({ slug: link.slug, isRead: true });
+    const el = scrollRef.current;
+    if (!link || !el || restoredRef.current) return;
+    restoredRef.current = true;
+
+    progressRef.current = link.reading_progress ?? 0;
+    lastSavedRef.current = progressRef.current;
+    markedReadRef.current = link.is_read;
+
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    if (maxScroll > 0 && progressRef.current > 0 && progressRef.current < 1) {
+      el.scrollTop = progressRef.current * maxScroll;
     }
-  }, [link?.slug, link?.is_read]);
+    if (maxScroll <= 0 && !markedReadRef.current) {
+      // The whole article fits on screen: it's read as soon as it's open.
+      markedReadRef.current = true;
+      progressRef.current = 1;
+      lastSavedRef.current = 1;
+      updateLink.mutate({ slug: link.slug, isRead: true, readingProgress: 1 });
+    }
+  }, [link]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    const currentSlug = link?.slug;
+    if (!el || !currentSlug) return;
+
+    const save = () => {
+      const value = progressRef.current;
+      if (Math.abs(value - lastSavedRef.current) < 0.01) return;
+      lastSavedRef.current = value;
+      updateLink.mutate({ slug: currentSlug, readingProgress: value });
+    };
+
+    const onScroll = () => {
+      const maxScroll = el.scrollHeight - el.clientHeight;
+      const progress =
+        maxScroll <= 0 ? 1 : Math.min(1, el.scrollTop / maxScroll);
+      if (progress > progressRef.current) progressRef.current = progress;
+
+      if (!markedReadRef.current && progressRef.current >= 0.98) {
+        markedReadRef.current = true;
+        progressRef.current = 1;
+        lastSavedRef.current = 1;
+        updateLink.mutate({
+          slug: currentSlug,
+          isRead: true,
+          readingProgress: 1,
+        });
+      }
+    };
+
+    const interval = setInterval(save, 3000);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      clearInterval(interval);
+      el.removeEventListener("scroll", onScroll);
+      save(); // persist the position when leaving the article
+    };
+  }, [link?.slug]);
 
   if (isLoading) {
     return (
