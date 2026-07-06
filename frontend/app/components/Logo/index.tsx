@@ -10,7 +10,7 @@ const Logo = ({ className, dark }: LogoProps) => (
       src={dark ? "/images/logo-dark.svg" : "/images/logo.svg"}
       width={190}
       height={40}
-      alt="Brainwave"
+      alt="Signet"
     />
   </a>
 );
