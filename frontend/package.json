@@ -2,6 +2,7 @@
   "name": "signet",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
