@@ -49,7 +49,7 @@ const Modal = ({
         >
           <div
             className={`fixed inset-0 ${
-              video ? "bg-n-7/95" : "bg-n-7/75 dark:bg-n-6/90"
+              video ? "bg-[#141718]/95" : "bg-[#141718]/75 dark:bg-[#232627]/90"
             } ${classOverlay}`}
             aria-hidden="true"
           />
@@ -65,18 +65,18 @@ const Modal = ({
         >
           <DialogPanel
             className={twMerge(
-              `relative z-10 max-w-150 w-full m-auto bg-n-1 rounded-3xl dark:bg-n-7 ${
+              `relative z-10 max-w-150 w-full m-auto bg-[#FEFEFE] rounded-3xl dark:bg-[#141718] ${
                 video &&
-                "static max-w-5xl aspect-video rounded-[1.25rem] bg-n-7 overflow-hidden shadow-[0_2.5rem_8rem_rgba(0,0,0,0.5)]"
+                "static max-w-5xl aspect-video rounded-[1.25rem] bg-[#141718] overflow-hidden shadow-[0_2.5rem_8rem_rgba(0,0,0,0.5)]"
               } ${classWrap}`,
             )}
           >
             {children}
             <button
               className={twMerge(
-                `text-0 fill-n-7 hover:fill-primary-1 ${
+                `text-0 fill-[#141718] hover:fill-[#0084FF] ${
                   video &&
-                  "absolute top-6 right-6 w-10 h-10 bg-n-1 rounded-full"
+                  "absolute top-6 right-6 w-10 h-10 bg-[#FEFEFE] rounded-full"
                 } ${classButtonClose}`,
               )}
               onClick={onClose}

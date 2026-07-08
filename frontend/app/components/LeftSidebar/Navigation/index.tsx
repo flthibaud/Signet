@@ -33,7 +33,7 @@ const Navigation = ({ visible, items }: NavigationProps) => {
           </Link>
         ) : (
           <button
-            className={`flex items-center w-full h-12 base2 font-semibold text-[#E8ECEF]/75 rounded-lg transition-colors hover:text-[#FEFEFE] ${
+            className={`flex items-center w-full h-12 base2 font-semibold text-[#E8ECEF]/75 rounded-lg transition-colors hover:cursor-pointer hover:text-[#FEFEFE] ${
               visible ? "px-5" : "px-3"
             }`}
             key={index}

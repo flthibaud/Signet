@@ -4,16 +4,19 @@ import Navigation from "./Navigation";
 import Profile from "./Profile";
 import ToggleTheme from "./ToggleTheme";
 import Logo from "~/components/Logo";
+import Search from "~/components/Search";
 
 import {
   PanelLeftClose,
   PanelRightClose,
   House,
-  Search,
+  Search as SearchIcon,
   Library,
   Rss,
 } from "lucide-react";
 import { twMerge } from "tailwind-merge";
+
+import { resultSearch } from "~/mocks/resultSearch";
 
 type LeftSidebarProps = {
   isCollapsed: boolean;
@@ -46,7 +49,7 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
     },
     {
       title: "Search",
-      icon: Search,
+      icon: SearchIcon,
       color: "fill-primary-2",
       onClick: () => setVisibleSearch(true),
     },
@@ -107,13 +110,13 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
       </div>
       <Modal
         className="md:p-0!"
-        classWrap="md:min-h-screen-ios md:rounded-none dark:shadow-[inset_0_0_0_0.0625rem_#232627,0_2rem_4rem_-1rem_rgba(0,0,0,0.33)] dark:md:shadow-none"
+        classWrap="flex flex-col overflow-hidden h-[80dvh] md:rounded-3xl rounded-none dark:shadow-[inset_0_0_0_0.0625rem_#232627,0_2rem_4rem_-1rem_rgba(0,0,0,0.33)] dark:md:shadow-none"
         classButtonClose="hidden md:flex md:absolute md:top-6 md:left-6 dark:fill-n-1"
         classOverlay="md:bg-n-1"
         visible={visibleSearch}
         onClose={() => setVisibleSearch(false)}
       >
-        <p>Search</p>
+        <Search items={resultSearch} />
       </Modal>
     </>
   );
