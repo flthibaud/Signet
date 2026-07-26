@@ -134,7 +134,12 @@ func (s *FeedService) fetchPage(ctx context.Context, u *url.URL) (*pageResponse,
 		return page, nil
 	}
 
-	s.markHostChallenged(u.Host)
+	// An empty page is our weakest signal — a paywall stub reads the same — so it
+	// escalates for this article only. Marking the host would route a whole site
+	// of legitimately thin pages to the browser for an hour.
+	if signal != challengeEmptyPage {
+		s.markHostChallenged(u.Host)
+	}
 
 	// Impersonation can make things *worse*: some WAFs match the exact Chrome
 	// header order and block it as "a bot pretending to be a browser", while

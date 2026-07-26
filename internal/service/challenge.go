@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // errChallenge means the page we got back is an anti-bot interstitial, not the
@@ -21,6 +22,10 @@ const (
 	challengeDataDome   challengeSignal = "datadome"
 	challengeIncapsula  challengeSignal = "incapsula"
 	challengeGeneric    challengeSignal = "generic"
+	// challengeEmptyPage is a 200 carrying no readable text. It is the weakest
+	// signal of the lot — a paywall stub looks much the same — so callers
+	// escalate on it without condemning the whole host.
+	challengeEmptyPage challengeSignal = "empty-page"
 )
 
 // challengeScanBytes caps how much of the body we scan for markers. Interstitial
@@ -28,10 +33,19 @@ const (
 // gain from scanning a multi-megabyte article.
 const challengeScanBytes = 200 << 10
 
-// challengeBodyMax is the size above which a title match alone is not enough to
-// call a page a challenge: a real interstitial is a near-empty document, while a
-// full article merely *mentioning* "just a moment" is not blocked.
+// challengeBodyMax is a cheap pre-filter for the emptiness heuristic: past this
+// size a document cannot be the near-empty page a challenge serves, so we skip
+// measuring it.
 const challengeBodyMax = 100 << 10
+
+// challengeMinText is the amount of readable text below which a 200 response is
+// treated as an interstitial rather than an article.
+//
+// Deliberately conservative: legitimate thin pages exist — a paywall stub is a
+// teaser of a few hundred characters — and flagging those would send perfectly
+// ordinary articles to the browser. The named providers are already covered by
+// scriptMarkers, so this only has to be a net for the ones we don't know.
+const challengeMinText = 300
 
 // scriptMarkers are challenge-runtime asset paths and cookie names. They cannot
 // plausibly appear in editorial prose, so they are conclusive on their own —
@@ -53,23 +67,11 @@ var scriptMarkers = map[challengeSignal][]string{
 	},
 }
 
-// titleMarkers are interstitial page titles, lowercased. They are localised and
-// change often, so they only count as a signal on a small page (see
-// challengeBodyMax) — this list will never be exhaustive.
-var titleMarkers = []string{
-	"just a moment",
-	"un instant",
-	"client challenge",
-	"attention required!",
-	"checking your browser",
-	"verifying you are human",
-	"vérification",
-	"access denied",
-	"accès refusé",
-	"security check",
-}
-
-var titleRE = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+var (
+	scriptStyleRE = regexp.MustCompile(`(?is)<(script|style|noscript)\b[^>]*>.*?</(script|style|noscript)>`)
+	tagRE         = regexp.MustCompile(`(?s)<[^>]*>`)
+	whitespaceRE  = regexp.MustCompile(`\s+`)
+)
 
 // detectChallenge reports whether a response is an anti-bot interstitial rather
 // than the page we asked for.
@@ -113,15 +115,18 @@ func detectChallenge(resp *pageResponse) challengeSignal {
 		}
 	}
 
-	// Title match: only trusted on a blocked status or a suspiciously small
-	// document, to avoid flagging an article that merely quotes the phrase.
-	if blocked || len(resp.Body) < challengeBodyMax {
-		title := strings.ToLower(pageTitle(lower))
-		for _, marker := range titleMarkers {
-			if strings.Contains(title, marker) {
-				return challengeGeneric
-			}
-		}
+	// Last net, for protections we don't have markers for. What sets an
+	// interstitial apart is not its size but that it carries nothing to read: a
+	// title, a script, a spinner. Measuring text instead of matching known page
+	// titles is what makes this work in any language — an Italian interstitial
+	// is no wordier than an English one, and a title list never would be.
+	//
+	// Restricted to 2xx: a blocked status is handled just below, and any other
+	// error status is a genuine failure whose short error page must not be
+	// mistaken for an interstitial — sending a 404 to a browser solves nothing.
+	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if success && len(resp.Body) < challengeBodyMax && visibleTextLen(lower) < challengeMinText {
+		return challengeEmptyPage
 	}
 
 	// A blocked status with no identifiable marker is still a block; escalating
@@ -133,13 +138,14 @@ func detectChallenge(resp *pageResponse) challengeSignal {
 	return challengeNone
 }
 
-// pageTitle extracts the <title> text, or "" when there is none.
-func pageTitle(body string) string {
-	m := titleRE.FindStringSubmatch(body)
-	if len(m) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(m[1])
+// visibleTextLen approximates how many characters of readable text an HTML
+// document carries, ignoring markup, scripts and styles. Counting runes rather
+// than bytes keeps the measure comparable across alphabets.
+func visibleTextLen(body string) int {
+	text := scriptStyleRE.ReplaceAllString(body, " ")
+	text = tagRE.ReplaceAllString(text, " ")
+	text = whitespaceRE.ReplaceAllString(text, " ")
+	return utf8.RuneCountInString(strings.TrimSpace(text))
 }
 
 // hasCookie reports whether the response sets a cookie whose name starts with

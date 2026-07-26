@@ -241,12 +241,28 @@ Trois familles de signaux, par ordre de fiabilité décroissante :
    d'assets : ils ne peuvent pas apparaître dans de la prose éditoriale, donc ils
    sont concluants même sur un 200 (Cloudflare sert certains interstitiels en
    200).
-3. **Titres** — `just a moment`, `un instant`, `client challenge`, `attention
-   required!`, `checking your browser`, `vérification`, `access denied`… Ces
-   titres sont **localisés** et changent souvent : cette liste ne sera jamais
-   exhaustive, elle n'est là qu'en filet. Elle n'est retenue que sur un statut
-   bloquant ou une page < 100 Ko, pour ne pas signaler un article qui *cite* la
-   phrase.
+3. **Densité de texte** (`challengeEmptyPage`) — filet pour les protections dont
+   on n'a pas de marqueur. Ce qui caractérise un interstitiel n'est pas sa
+   taille mais le fait qu'il ne contient **rien à lire** : un titre, un script,
+   un spinner. On mesure donc le texte visible (hors balises, `<script>`,
+   `<style>`), en *runes* et pas en octets pour que les alphabets non latins ne
+   paraissent pas plus fournis qu'ils ne sont.
+
+   C'est délibérément ce critère plutôt qu'une liste de titres connus
+   (`"Just a moment..."`, `"Client Challenge"`…) : une telle liste est
+   **localisée** et ne serait jamais exhaustive — un interstitiel italien ou
+   japonais y échapperait. Mesurer le texte marche dans toutes les langues.
+
+   Deux garde-fous, parce que ce signal est le plus faible des trois :
+   - **Seuil bas (300 caractères)** et **2xx uniquement**. Des pages fines
+     légitimes existent — un stub de paywall, c'est un teaser de quelques
+     centaines de caractères — et les signaler enverrait des articles
+     parfaitement normaux au navigateur. Idem pour une page d'erreur 404 :
+     courte, mais l'escalader ne résoudrait rien. En pratique la marge est
+     large : les pages réelles mesurées vont de 1 500 à 12 000 caractères.
+   - **Le host n'est pas marqué.** Contrairement aux autres signaux, une page
+     vide fait escalader *cet article* seulement ; un site entier de pages
+     fines ne part pas au navigateur pour une heure.
 
 Enfin, un statut bloquant sans marqueur identifiable reste un blocage : on
 escalade quand même, c'est tout ce qui reste à essayer.

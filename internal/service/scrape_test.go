@@ -34,8 +34,11 @@ func (f *fakeFetcher) fetch(ctx context.Context, u *url.URL) (*pageResponse, err
 	return &clone, nil
 }
 
+// okPage wraps body in enough real text to clear the empty-page heuristic, so
+// these tests exercise the escalation ladder rather than the detector.
 func okPage(body string) *pageResponse {
-	return &pageResponse{StatusCode: 200, Header: http.Header{}, Body: []byte(body)}
+	full := "<html><body>" + body + strings.Repeat("<p>du contenu editorial bien reel.</p>", 20) + "</body></html>"
+	return &pageResponse{StatusCode: 200, Header: http.Header{}, Body: []byte(full)}
 }
 
 func challengePage() *pageResponse {
