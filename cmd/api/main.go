@@ -36,6 +36,7 @@ type config struct {
 		workers   int
 		batchSize int
 	}
+	fetch service.FetchConfig
 }
 
 type application struct {
@@ -77,6 +78,25 @@ func main() {
 		cfg.scheduler.batchSize = 50
 	}
 
+	// Anti-bot fetching. TLS impersonation is on unless explicitly disabled: it
+	// costs nothing on normal sites and is what gets past Cloudflare's passive
+	// fingerprint filtering. RSS polling is never affected.
+	cfg.fetch.TLSImpersonate = true
+	if v := os.Getenv("TLS_IMPERSONATE_ENABLED"); v != "" {
+		cfg.fetch.TLSImpersonate, err = strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid TLS_IMPERSONATE_ENABLED: %v", err)
+		}
+	}
+	cfg.fetch.SolverURL = os.Getenv("SOLVER_URL")
+	if v := os.Getenv("SOLVER_TIMEOUT"); v != "" {
+		cfg.fetch.SolverTimeout, err = time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid SOLVER_TIMEOUT: %v", err)
+		}
+	}
+	cfg.fetch.SolverMaxPerFeed, _ = strconv.Atoi(os.Getenv("SOLVER_MAX_PER_FEED"))
+
 	databaseURL := os.Getenv("DATABASE_URI")
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URI is not set")
@@ -101,7 +121,7 @@ func main() {
 	models := data.NewModels(db)
 
 	// 3. Init de la couche SERVICE (avec injection de data)
-	services := service.NewServices(models)
+	services := service.NewServices(models, logger, cfg.fetch)
 
 	// 4. Init du scheduler
 	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)

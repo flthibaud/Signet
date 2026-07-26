@@ -1,0 +1,24 @@
+# Optional browser sidecar for anti-bot article fetching.
+#
+# Only needed for sites that require executing a JavaScript challenge; the
+# impersonated TLS client built into the binary handles passive fingerprint
+# filtering on its own. See docs/ANTIBOT_FETCHING.md.
+#
+#   docker compose -f docker-compose.solver.yml up -d
+#   SOLVER_URL="http://127.0.0.1:8191/v1"
+#
+# Byparr speaks the FlareSolverr REST contract on the same port, so pointing
+# SOLVER_URL at FlareSolverr or FlareBypasser instead works without code changes.
+services:
+  solver:
+    image: ghcr.io/thephaseless/byparr:latest
+    container_name: signet-solver
+    restart: unless-stopped
+    ports:
+      # Bound to loopback: this endpoint fetches arbitrary URLs on request and
+      # must never be reachable from outside the host.
+      - "127.0.0.1:8191:8191"
+    environment:
+      - TZ=Europe/Paris
+    # A real browser needs more shared memory than Docker's 64 MB default.
+    shm_size: 2gb

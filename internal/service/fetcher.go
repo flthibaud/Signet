@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,12 +10,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	readability "codeberg.org/readeck/go-readability/v2"
 	"github.com/flthibaud/signet/internal/data"
+	"github.com/flthibaud/signet/internal/jsonlog"
 	readabilitymd "github.com/flthibaud/signet/internal/readability"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
@@ -27,33 +30,71 @@ var (
 	ErrFeedNotFound = errors.New("feed not found or unreachable")
 )
 
-const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+// UserAgent is the User-Agent sent on RSS fetches. It matches the browser the
+// scraper impersonates (see browserUserAgent) so we never announce two different
+// browsers from the same deployment.
+const UserAgent = browserUserAgent
 
 // feedProcessTimeout bounds how long a single feed sync may run. It must stay
 // below the GetFeedsToSync lock window (10 minutes) so we always release the
 // feed before another worker considers the lock stale and reclaims it.
 const feedProcessTimeout = 8 * time.Minute
 
+// scrapeTimeout bounds a single article fetch, whichever transport handles it.
+const scrapeTimeout = 30 * time.Second
+
 type FeedService struct {
 	models      data.Models
 	client      *http.Client
 	parser      *gofeed.Parser
 	readability *readabilitymd.Readability
+	logger      *jsonlog.Logger
+	fetchCfg    FetchConfig
+
+	// scrape is the transport used for article pages: a browser-impersonating
+	// TLS client by default. scrapeStdlib is the same net/http client the RSS
+	// polling uses, kept reachable as a fallback. solver is the browser sidecar,
+	// nil when unconfigured.
+	scrape       pageFetcher
+	scrapeStdlib pageFetcher
+	solver       *solverClient
 
 	// scrapeLimiters rate-limits readability fetches per source domain (1 req/s),
 	// so distributing many new articles from one site doesn't hammer it.
 	scrapeLimiters sync.Map // map[string]*rate.Limiter
+
+	// challengedHosts remembers hosts that answered with an anti-bot challenge,
+	// so their other articles skip straight to the sidecar.
+	challengedHosts sync.Map // map[string]time.Time (expiry)
 }
 
-func NewFeedService(models data.Models) *FeedService {
-	return &FeedService{
-		models: models,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		parser:      gofeed.NewParser(),
-		readability: readabilitymd.NewReadability(),
+func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig) *FeedService {
+	cfg.setDefaults()
+
+	client := &http.Client{Timeout: scrapeTimeout}
+	stdlib := &stdlibFetcher{client: client}
+
+	scrape, err := newScrapeFetcher(cfg.TLSImpersonate, scrapeTimeout, stdlib)
+	if err != nil && logger != nil {
+		logger.PrintError(err, nil)
 	}
+
+	s := &FeedService{
+		models:       models,
+		client:       client,
+		parser:       gofeed.NewParser(),
+		readability:  readabilitymd.NewReadability(),
+		logger:       logger,
+		fetchCfg:     cfg,
+		scrape:       scrape,
+		scrapeStdlib: stdlib,
+	}
+
+	if cfg.SolverURL != "" {
+		s.solver = newSolverClient(cfg.SolverURL, cfg.SolverTimeout)
+	}
+
+	return s
 }
 
 // CreateFromURL crée un feed depuis une URL RSS
@@ -72,12 +113,22 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 	}
 	defer resp.Body.Close()
 
+	body := io.Reader(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: status %d", ErrFeedNotFound, resp.StatusCode)
+		// Unlike background polling, this runs in front of a user waiting on the
+		// "add feed" form, so a Cloudflare block is a visible failure. Retry once
+		// with the impersonated client — the double fetch is fine here: it's a
+		// rare, manual action, not the 15-minute poll.
+		retried, retryErr := s.retryFeedFetch(ctx, feedURL, resp.StatusCode)
+		if retryErr != nil {
+			return nil, fmt.Errorf("%w: status %d", ErrFeedNotFound, resp.StatusCode)
+		}
+		body = bytes.NewReader(retried)
 	}
 
 	// 2. Parse le RSS
-	parsedFeed, err := s.parser.Parse(resp.Body)
+	parsedFeed, err := s.parser.Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidFeed, err)
 	}
@@ -107,6 +158,36 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 	return feed, nil
 }
 
+// retryFeedFetch re-fetches a feed URL with the impersonated client after the
+// stdlib client was rejected. It only fires on statuses that look like anti-bot
+// filtering — a 404 stays a 404, and the RSS polling path never calls this.
+func (s *FeedService) retryFeedFetch(ctx context.Context, feedURL string, status int) ([]byte, error) {
+	if s.scrape == s.scrapeStdlib {
+		return nil, fmt.Errorf("no impersonated client available")
+	}
+	switch status {
+	case http.StatusForbidden, http.StatusServiceUnavailable, http.StatusTooManyRequests:
+	default:
+		return nil, fmt.Errorf("status %d is not an anti-bot block", status)
+	}
+
+	parsed, err := url.Parse(feedURL)
+	if err != nil {
+		return nil, err
+	}
+
+	page, err := s.scrape.fetch(ctx, parsed)
+	if err != nil {
+		return nil, err
+	}
+	if page.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", page.StatusCode)
+	}
+
+	s.logFetch("feed fetch recovered with impersonated client", parsed, strconv.Itoa(status), nil)
+	return page.Body, nil
+}
+
 // createArticleFromItem crée un article depuis un RSS item
 func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash string) (*data.Article, error) {
 	strip := bluemonday.StrictPolicy()
@@ -115,7 +196,10 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 
 	var title, originalHTML, textContent string
 
-	if err != nil || parsed.Title() == "Just a moment..." || parsed.Title() == "Client Challenge" || parsed.Title() == "" {
+	// Anti-bot interstitials no longer reach this point: fetchWithReadability
+	// detects them on the response itself and returns an error, so an empty
+	// title here just means readability found nothing usable.
+	if err != nil || parsed.Title() == "" {
 		title = item.Title
 		originalHTML = item.Content
 		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
@@ -155,6 +239,11 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	// the feed before another worker can reclaim the (stale) lock.
 	ctx, cancel := context.WithTimeout(ctx, feedProcessTimeout)
 	defer cancel()
+
+	// Cap browser solves for this run: each one can take a minute, and letting
+	// them eat the whole feedProcessTimeout would starve the remaining items and
+	// stop the ETag from advancing, making the next tick redo everything.
+	ctx = withSolveBudget(ctx, s.fetchCfg.SolverMaxPerFeed)
 
 	// 1. Build HTTP request with conditional headers
 	req, err := http.NewRequestWithContext(ctx, "GET", feed.Url, nil)
@@ -306,7 +395,11 @@ func slugFromHash(hash string) string {
 	return hash
 }
 
-// fetchWithReadability tente de fetch avec un User-Agent réaliste
+// fetchWithReadability récupère la page d'un article et en extrait le contenu.
+//
+// Le fetch passe par l'échelle anti-bot (voir fetchPage) : client TLS imitant un
+// navigateur, puis sidecar navigateur si un challenge JS persiste. Une erreur
+// ici fait retomber l'appelant sur le contenu de l'item RSS.
 func (s *FeedService) fetchWithReadability(ctx context.Context, articleURL string) (readability.Article, error) {
 	baseURL, err := url.Parse(articleURL)
 	if err != nil {
@@ -319,25 +412,13 @@ func (s *FeedService) fetchWithReadability(ctx context.Context, articleURL strin
 		return readability.Article{}, err
 	}
 
-	// Crée une requête HTTP custom avec User-Agent, liée au contexte pour être
-	// annulable (deadline de traitement du feed, arrêt de l'application).
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL.String(), nil)
+	page, err := s.fetchPage(ctx, baseURL)
 	if err != nil {
 		return readability.Article{}, err
 	}
-
-	req.Header.Set("User-Agent", UserAgent)
-
-	// Réutilise le client partagé (pool de connexions) plutôt que d'en créer un
-	// par article.
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return readability.Article{}, err
-	}
-	defer resp.Body.Close()
 
 	// Parse avec readability
-	return readability.FromReader(resp.Body, baseURL)
+	return readability.FromReader(bytes.NewReader(page.Body), page.URL)
 }
 
 // scrapeLimiter returns the per-domain rate limiter for readability fetches,

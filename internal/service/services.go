@@ -2,6 +2,7 @@ package service
 
 import (
 	"github.com/flthibaud/signet/internal/data"
+	"github.com/flthibaud/signet/internal/jsonlog"
 )
 
 // Services regroupe toute la logique métier de ton application.
@@ -10,9 +11,10 @@ type Services struct {
 	FeedService *FeedService
 }
 
-// NewServices initialise tous les services en leur injectant les modèles (accès DB).
-func NewServices(models data.Models) Services {
+// NewServices initialise tous les services en leur injectant les modèles (accès
+// DB), le logger et la configuration de fetch.
+func NewServices(models data.Models, logger *jsonlog.Logger, fetchCfg FetchConfig) Services {
 	return Services{
-		FeedService: NewFeedService(models),
+		FeedService: NewFeedService(models, logger, fetchCfg),
 	}
 }
