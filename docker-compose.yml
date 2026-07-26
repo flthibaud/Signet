@@ -45,6 +45,15 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # The app writes nothing to disk — the frontend is embedded in the binary and
+    # all state lives in Postgres — so it runs unprivileged (USER in the
+    # Dockerfile) on a read-only root filesystem. /tmp stays writable as a tmpfs
+    # because the Go runtime and the HTTP stack may spill there.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
     environment:
       PORT: ${PORT:-8000}
       ENV: ${ENV:-production}
@@ -67,7 +76,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-8000}/v1/healthcheck"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8000}/v1/readiness >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

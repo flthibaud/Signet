@@ -126,7 +126,8 @@ L'application suit une architecture en 3 couches :
 
 | Méthode | Route | Auth | Description |
 |---------|-------|------|-------------|
-| `GET` | `/v1/healthcheck` | Non | Vérification santé du serveur |
+| `GET` | `/v1/healthcheck` | Non | Liveness : le process sert des requêtes, sans vérifier ses dépendances |
+| `GET` | `/v1/readiness` | Non | Readiness : `PingContext` sur la base (timeout 2s), `503` si injoignable |
 | `POST` | `/v1/users` | Non | Inscription d'un utilisateur |
 | `POST` | `/v1/tokens/authentication` | Non | Connexion (obtenir un token) |
 | `GET` | `/v1/subscriptions` | Oui | Liste des abonnements RSS |

@@ -42,6 +42,7 @@ type config struct {
 type application struct {
 	config    config
 	logger    *jsonlog.Logger
+	db        *sql.DB
 	models    data.Models
 	services  service.Services
 	scheduler *service.Scheduler
@@ -185,6 +186,7 @@ func main() {
 	app := &application{
 		config:    cfg,
 		logger:    logger,
+		db:        db,
 		models:    models,
 		services:  services,
 		scheduler: scheduler,

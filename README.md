@@ -42,6 +42,8 @@ docker compose up -d --build
 
 L'application écoute sur <http://localhost:8000>. Les migrations sont appliquées automatiquement avant le démarrage de l'API.
 
+Le conteneur applicatif tourne sous un utilisateur non privilégié, avec un système de fichiers racine en lecture seule (seul `/tmp` est un tmpfs) : rien n'est écrit sur disque, tout l'état vit dans Postgres. Son healthcheck interroge `/v1/readiness`, qui échoue si la base est injoignable.
+
 ```bash
 docker compose logs -f app
 docker compose down          # ajouter -v pour supprimer aussi le volume Postgres
@@ -137,7 +139,8 @@ Détails dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Méthode | Route | Auth | Description |
 |---|---|---|---|
-| `GET` | `/v1/healthcheck` | Non | Vérification santé |
+| `GET` | `/v1/healthcheck` | Non | Liveness — le process répond (ne touche aucune dépendance) |
+| `GET` | `/v1/readiness` | Non | Readiness — `200` si la base est joignable, `503` sinon |
 | `POST` | `/v1/users` | Non | Inscription |
 | `POST` | `/v1/tokens/authentication` | Non | Connexion |
 | `DELETE` | `/v1/tokens/authentication` | Oui | Déconnexion |
