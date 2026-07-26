@@ -178,4 +178,18 @@ signet/
 
 ## Licence
 
-MIT
+Signet est distribué sous licence **[GNU AGPL-3.0-or-later](LICENSE)**.
+
+Copyright (C) 2026 Florian Thibaud
+
+Concrètement : vous êtes libre d'utiliser, modifier et redistribuer Signet, y
+compris pour vos propres besoins ou ceux de votre organisation. En contrepartie,
+si vous distribuez une version modifiée **ou si vous la proposez à des tiers via
+un réseau** (hébergement, SaaS), vous devez en publier le code source sous la
+même licence.
+
+L'auto-hébergement pour soi, sa famille ou son équipe n'impose rien : cette
+clause vise la mise à disposition d'un service à des utilisateurs tiers.
+
+Le nom et le logo **Signet** ne sont pas couverts par la licence — voir
+[NOTICE.md](NOTICE.md).
