@@ -57,7 +57,7 @@ export const Links = () => {
         apiFetch<LinksResponse>(`/v1/links?page=${pageParam}${filterParams}`),
       initialPageParam: 1,
       getNextPageParam: (lastPage) =>
-        lastPage.metadata.current_page < lastPage.metadata.total_pages
+        lastPage.metadata.has_more
           ? lastPage.metadata.current_page + 1
           : undefined,
     });

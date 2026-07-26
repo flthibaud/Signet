@@ -93,12 +93,15 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 	return where, args
 }
 
-func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters LinkFilters, limit, offset int) ([]*LinkWithArticle, int, error) {
+// ListForUser returns one page of the user's links, plus whether a further
+// page exists. It reports no total: count(*) OVER() made every page scan the
+// whole filtered set, which a library of thousands of links pays for on each
+// scroll, and the infinite-scrolling UI only ever needs "is there more".
+func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters LinkFilters, limit, offset int) ([]*LinkWithArticle, bool, error) {
 	where, args := buildLinkFiltersWhere(userID, filters)
 
 	query := fmt.Sprintf(`
-		SELECT count(*) OVER(),
-			l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
+		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.saved_at, l.created_at, l.updated_at,
 			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, a.published_at,
 			f.original_title
@@ -106,25 +109,23 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 		JOIN articles a ON l.article_id = a.id
 		LEFT JOIN feeds f ON l.feed_id = f.id
 		WHERE %s
-		ORDER BY a.published_at DESC
+		ORDER BY a.published_at DESC, l.id DESC
 		LIMIT $%d OFFSET $%d`,
 		strings.Join(where, " AND "), len(args)+1, len(args)+2)
 
-	args = append(args, limit, offset)
+	args = append(args, limit+1, offset)
 
 	rows, err := m.DB.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, 0, err
+		return nil, false, err
 	}
 	defer rows.Close()
 
-	totalRecords := 0
 	var links []*LinkWithArticle
 
 	for rows.Next() {
 		var link LinkWithArticle
 		err := rows.Scan(
-			&totalRecords,
 			&link.ID,
 			&link.ArticleID,
 			&link.Slug,
@@ -144,17 +145,22 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 			&link.FeedTitle,
 		)
 		if err != nil {
-			return nil, 0, err
+			return nil, false, err
 		}
 		link.UserID = userID
 		links = append(links, &link)
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, false, err
 	}
 
-	return links, totalRecords, nil
+	hasMore := len(links) > limit
+	if hasMore {
+		links = links[:limit]
+	}
+
+	return links, hasMore, nil
 }
 
 func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID) (*LinkDetail, error) {

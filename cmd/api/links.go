@@ -39,7 +39,7 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	links, total, err := app.models.Links.ListForUser(r.Context(), user.ID, filters, p.Limit(), p.Offset())
+	links, hasMore, err := app.models.Links.ListForUser(r.Context(), user.ID, filters, p.Limit(), p.Offset())
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 		return
@@ -48,10 +48,9 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 	err = app.writeJSON(w, http.StatusOK, envelope{
 		"links": links,
 		"metadata": envelope{
-			"current_page":  p.Page,
-			"page_size":     p.PageSize,
-			"total_records": total,
-			"total_pages":   (total + p.PageSize - 1) / p.PageSize,
+			"current_page": p.Page,
+			"page_size":    p.PageSize,
+			"has_more":     hasMore,
 		},
 	}, nil)
 	if err != nil {
