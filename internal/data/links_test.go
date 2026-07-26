@@ -22,20 +22,31 @@ func TestBuildLinkFiltersWhere(t *testing.T) {
 		wantArgs  []any
 	}{
 		{
-			name:      "no filters defaults to non-archived",
+			name:      "no filters spans the whole library",
 			filters:   LinkFilters{},
+			wantWhere: []string{"l.user_id = $1"},
+			wantArgs:  []any{userID},
+		},
+		{
+			name:      "non-archived only",
+			filters:   LinkFilters{Archived: boolPtr(false)},
 			wantWhere: []string{"l.user_id = $1", "l.archived_at IS NULL"},
 			wantArgs:  []any{userID},
 		},
 		{
 			name:      "archived only",
-			filters:   LinkFilters{Archived: true},
+			filters:   LinkFilters{Archived: boolPtr(true)},
 			wantWhere: []string{"l.user_id = $1", "l.archived_at IS NOT NULL"},
 			wantArgs:  []any{userID},
 		},
 		{
-			name:    "all filters keep placeholders in sync with args",
-			filters: LinkFilters{IsRead: boolPtr(false), IsStarred: boolPtr(true), FeedID: int64Ptr(42)},
+			name: "all filters keep placeholders in sync with args",
+			filters: LinkFilters{
+				IsRead:    boolPtr(false),
+				IsStarred: boolPtr(true),
+				Archived:  boolPtr(false),
+				FeedID:    int64Ptr(42),
+			},
 			wantWhere: []string{
 				"l.user_id = $1",
 				"l.archived_at IS NULL",

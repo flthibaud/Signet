@@ -57,12 +57,10 @@ type LinkModel struct {
 	DB *sql.DB
 }
 
-// LinkFilters narrows ListForUser results. Nil pointer fields are ignored.
-// Archived defaults to false, meaning only non-archived links are returned.
 type LinkFilters struct {
 	IsRead    *bool
 	IsStarred *bool
-	Archived  bool
+	Archived  *bool
 	FeedID    *int64
 }
 
@@ -72,10 +70,12 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 	where := []string{"l.user_id = $1"}
 	args := []any{userID}
 
-	if f.Archived {
-		where = append(where, "l.archived_at IS NOT NULL")
-	} else {
-		where = append(where, "l.archived_at IS NULL")
+	if f.Archived != nil {
+		if *f.Archived {
+			where = append(where, "l.archived_at IS NOT NULL")
+		} else {
+			where = append(where, "l.archived_at IS NULL")
+		}
 	}
 	if f.IsRead != nil {
 		args = append(args, *f.IsRead)
@@ -224,7 +224,7 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 	}
 
 	query := `
-		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
+		INSERT INTO links (user_id, article_id, feed_id, slug, published_at, saved_at, updated_at)
 		VALUES `
 
 	// Each user has its own slug namespace (UNIQUE(user_id, slug)), so every
@@ -236,8 +236,9 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 			query += ", "
 		}
 		paramBase := i * 4
-		query += fmt.Sprintf("($%d, $%d, $%d, $%d, NOW(), NOW())",
-			paramBase+1, paramBase+2, paramBase+3, paramBase+4)
+		query += fmt.Sprintf(
+			"($%d, $%d, $%d, $%d, (SELECT COALESCE(published_at, NOW()) FROM articles WHERE id = $%d), NOW(), NOW())",
+			paramBase+1, paramBase+2, paramBase+3, paramBase+4, paramBase+2)
 		args = append(args, uid, articleID, feedID, baseSlug)
 	}
 
@@ -326,4 +327,3 @@ func (m LinkModel) Update(ctx context.Context, userID uuid.UUID, slug string, up
 
 	return nil
 }
-

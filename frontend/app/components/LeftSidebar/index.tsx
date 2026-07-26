@@ -16,8 +16,6 @@ import {
 } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 
-import { resultSearch } from "~/mocks/resultSearch";
-
 type LeftSidebarProps = {
   isCollapsed: boolean;
   setIsCollapsed?: React.Dispatch<React.SetStateAction<boolean>>;
@@ -116,7 +114,7 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
         visible={visibleSearch}
         onClose={() => setVisibleSearch(false)}
       >
-        <Search items={resultSearch} />
+        <Search />
       </Modal>
     </>
   );

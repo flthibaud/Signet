@@ -26,6 +26,7 @@ L'objectif est de proposer une alternative légère, self-hostable, avec un seul
 - **Fetch anti-bot** : fingerprint TLS de navigateur par défaut, sidecar navigateur optionnel pour les challenges JS ([docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md))
 - **Déduplication** : l'article est stocké une fois, `links` porte l'état par utilisateur
 - État de lecture par utilisateur : lu, favori, archivé, progression, slug unique
+- **Recherche full-text** multilingue et insensible aux accents, avec filtres par flux et par date
 - Rate limiting par IP sur l'API (`/v1/*` uniquement, désactivé par défaut)
 
 ## Démarrage rapide
@@ -126,7 +127,7 @@ React Router SPA (embarqué)  →  cmd/api/        handlers, middleware, auth
 - **Go 1.25** + [`httprouter`](https://github.com/julienschmidt/httprouter), PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
 - [`gofeed`](https://github.com/mmcdole/gofeed) (RSS/Atom), [`go-readability`](https://codeberg.org/readeck/go-readability) (extraction), [`bluemonday`](https://github.com/microcosm-cc/bluemonday) (sanitization), [`tls-client`](https://github.com/bogdanfinn/tls-client) (fingerprint navigateur)
 - **React 19** + **React Router v7** en **mode SPA** (`ssr: false`), **TailwindCSS v4**, **TanStack Query**, **react-hook-form** + **zod**
-- Schéma PostgreSQL avec triggers et `citext`. Un index full-text `tsvector` (français, pondéré titre/description/contenu) est maintenu par trigger mais n'est **pas encore exposé** par un endpoint de recherche.
+- Schéma PostgreSQL avec triggers et `citext`. La recherche full-text s'appuie sur un `tsvector` multilingue et insensible aux accents, maintenu par colonne générée et pondéré titre/description/contenu, exposé par `GET /v1/search`.
 
 Détails dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -145,6 +146,67 @@ Détails dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `GET` | `/v1/links` | Oui | Articles, paginés — filtres `is_read`, `is_starred`, `archived`, `feed_id` |
 | `GET` | `/v1/links/:slug` | Oui | Détail d'un article |
 | `PATCH` | `/v1/links/:slug` | Oui | Mettre à jour l'état de lecture |
+| `GET` | `/v1/search` | Oui | Recherche full-text — voir ci-dessous |
+
+### Recherche full-text
+
+`GET /v1/search` interroge la bibliothèque de l'utilisateur via l'index `tsvector`
+d'`articles` (titre pondéré A, description B, contenu C).
+
+| Paramètre | Description |
+|---|---|
+| `q` | Requête (syntaxe `websearch_to_tsquery` : `"phrase exacte"`, `-exclusion`, `or`). Le dernier terme est traité comme un préfixe, pour la recherche au fil de la frappe. Vide = les articles récents, triés par date de publication. Entre 2 et 200 caractères. |
+| `lang` | Locale du chercheur (`fr-FR`, `en`…), pour le stemming de la requête. À défaut, l'en-tête `Accept-Language` ; à défaut, configuration neutre |
+| `feed_id`, `is_read`, `is_starred` | Mêmes filtres que `/v1/links` |
+| `archived` | Tri-état : absent = toute la bibliothèque (archivés inclus), contrairement à `/v1/links` |
+| `since` | Borne inférieure RFC3339 sur la **date de publication** — le client la calcule dans son fuseau |
+| `page`, `page_size` | Pagination (défaut 20, max 100) |
+
+La réponse ne renvoie **pas** de total exact, mais un booléen `has_more`. Compter
+tous les résultats obligerait Postgres à les parcourir entièrement pour produire
+un nombre dont seule la présence d'une page suivante est utile.
+
+Le tri par pertinence ne peut pas s'arrêter tôt : connaître les 20 meilleurs
+impose de scorer tous les résultats. Le classement ne porte donc que sur les
+**1000 correspondances publiées le plus récemment** (`searchRankCandidates`), bornage qui
+rend le coût constant quelle que soit la taille de la bibliothèque. En
+contrepartie, un article très pertinent mais plus ancien que ce seuil peut sortir
+d'une recherche très large — et la pagination ne va pas au-delà de 1000
+résultats.
+
+Les dates affichées et filtrées sont celles de **publication**, jamais celles
+d'import : un abonnement à un flux horodate tous les articles récupérés à la même
+seconde, ce qui classerait un article vieux de trois semaines dans « aujourd'hui ».
+`links.published_at` duplique la colonne d'`articles` pour que ce tri passe par un
+index (migration `000010`).
+
+Chaque résultat porte un `snippet` produit par `ts_headline`, où les termes trouvés
+sont encadrés par `[[hl]]` / `[[/hl]]`. Ce sont des marqueurs texte, jamais du HTML :
+le frontend les découpe pour rendre un `<mark>` sans injecter de balise.
+
+### Multilingue et accents
+
+Chaque article porte sa propre configuration de recherche (`articles.language`),
+déduite du `<language>` du flux à l'import. Son `tsv` est **hybride** : le texte
+est indexé deux fois, une fois avec la langue de l'article, une fois avec la
+configuration neutre `simple_ua`. Côté requête, les deux moitiés sont interrogées
+et combinées par `|`.
+
+C'est ce qui évite d'avoir à deviner la langue de la requête : la moitié neutre
+matche ce que l'utilisateur a littéralement tapé, quelle que soit la langue, et la
+moitié stemmée ajoute la morphologie de **sa** locale. Un francophone qui cherche
+« objets connectes » trouve ainsi un article contenant « objet connecté » — sans
+`lang`, la même requête ne renvoie rien.
+
+Toutes les configurations passent par `unaccent` (suffixe `_ua`), donc « hebergee »
+trouve « hébergée » et « Zuge » trouve « Züge », dans les deux sens.
+
+> **Limite connue — CJK.** Le parser de Postgres découpe sur les espaces : en
+> japonais et en chinois, une phrase entière devient un seul lexème et la
+> recherche partielle ne trouve rien. Ces langues retombent sur `simple_ua`, ce
+> qui ne les répare pas. Les corriger demanderait des bigrammes applicatifs ou
+> PGroonga (indisponible sur Postgres standard). Le coréen, l'arabe, le russe et
+> toutes les langues à séparateurs fonctionnent normalement.
 
 Les erreurs suivent une enveloppe unique : `{"error": ...}`, une chaîne pour les erreurs génériques, un objet `{champ: message}` pour les 422 de validation.
 

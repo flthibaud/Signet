@@ -35,6 +35,9 @@ func (app *application) routes() http.Handler {
 	// Liste des articles (tous les articles de tous les feeds, triés par date de publication)
 	router.HandlerFunc(http.MethodGet, "/v1/links", app.listLinksHandler)
 
+	// Recherche full-text dans la bibliotheque de l'utilisateur
+	router.HandlerFunc(http.MethodGet, "/v1/search", app.searchHandler)
+
 	// Recuperer le contenu d'un article
 	router.HandlerFunc(http.MethodGet, "/v1/links/:slug", app.getLinkHandler)
 	router.HandlerFunc(http.MethodPatch, "/v1/links/:slug", app.updateLinkHandler)
