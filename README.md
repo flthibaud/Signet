@@ -58,6 +58,9 @@ Toutes les variables ont un défaut sain : seule `DATABASE_URI` est obligatoire.
 | Variable | Défaut | Description |
 |---|---|---|
 | `DATABASE_URI` | — | **Requis.** DSN PostgreSQL |
+| `DATABASE_MAX_OPEN_CONNS` | `25` | Connexions ouvertes max (`0` = illimité) |
+| `DATABASE_MAX_IDLE_CONNS` | `25` | Connexions inactives conservées |
+| `DATABASE_MAX_IDLE_TIME` | `15m` | Durée avant fermeture d'une connexion inactive |
 | `PORT` | `8000` | Port d'écoute HTTP |
 | `ENV` | `` | Nom de l'environnement, remonté par le healthcheck |
 | `RATE_LIMITER_ENABLED` | `false` | Rate limiting par IP sur `/v1/*` |

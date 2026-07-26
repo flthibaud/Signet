@@ -24,7 +24,7 @@ type config struct {
 		dsn          string
 		maxOpenConns int
 		maxIdleConns int
-		maxIdleTime  string
+		maxIdleTime  time.Duration
 	}
 	limiter struct {
 		rps     float64
@@ -136,6 +136,30 @@ func main() {
 
 	cfg.db.dsn = databaseURL
 
+	cfg.db.maxOpenConns = 25
+	if v := os.Getenv("DATABASE_MAX_OPEN_CONNS"); v != "" {
+		cfg.db.maxOpenConns, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid DATABASE_MAX_OPEN_CONNS: %v", err)
+		}
+	}
+
+	cfg.db.maxIdleConns = 25
+	if v := os.Getenv("DATABASE_MAX_IDLE_CONNS"); v != "" {
+		cfg.db.maxIdleConns, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid DATABASE_MAX_IDLE_CONNS: %v", err)
+		}
+	}
+
+	cfg.db.maxIdleTime = 15 * time.Minute
+	if v := os.Getenv("DATABASE_MAX_IDLE_TIME"); v != "" {
+		cfg.db.maxIdleTime, err = time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid DATABASE_MAX_IDLE_TIME: %v", err)
+		}
+	}
+
 	logger := jsonlog.New(os.Stdout, jsonlog.LevelInfo)
 
 	db, err := openDB(cfg)
@@ -183,6 +207,7 @@ func openDB(cfg config) (*sql.DB, error) {
 	// Configurer le pool de connexion
 	db.SetMaxOpenConns(cfg.db.maxOpenConns)
 	db.SetMaxIdleConns(cfg.db.maxIdleConns)
+	db.SetConnMaxIdleTime(cfg.db.maxIdleTime)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
