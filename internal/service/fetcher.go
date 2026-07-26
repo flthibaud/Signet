@@ -188,10 +188,13 @@ func (s *FeedService) retryFeedFetch(ctx context.Context, feedURL string, status
 	return page.Body, nil
 }
 
+func plainText(s string) string {
+	stripped := bluemonday.StrictPolicy().Sanitize(s)
+	return strings.TrimSpace(html.UnescapeString(stripped))
+}
+
 // createArticleFromItem crée un article depuis un RSS item
 func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash string) (*data.Article, error) {
-	strip := bluemonday.StrictPolicy()
-
 	parsed, err := s.fetchWithReadability(ctx, item.Link)
 
 	var title, originalHTML, textContent string
@@ -214,7 +217,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		Url:          item.Link,
 		Hash:         hash,
 		Title:        title,
-		Description:  strip.Sanitize(item.Description),
+		Description:  plainText(item.Description),
 		Author:       getAuthor(item),
 		ImageURL:     getItemImageURL(item),
 		PageType:     "article",
