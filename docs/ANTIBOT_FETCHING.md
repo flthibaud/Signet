@@ -170,16 +170,37 @@ POST http://127.0.0.1:8191/v1
 
 Changer de sidecar = changer `SOLVER_URL`, aucun code à toucher.
 
+**Piège du timeout.** Les deux implémentations divergent sur ce champ :
+FlareSolverr lit `maxTimeout` en **millisecondes**, Byparr lit `max_timeout` en
+**secondes** et n'a pas d'alias camelCase. Chacune ignore silencieusement la clé
+qu'elle ne connaît pas et retombe alors sur son propre défaut de 60 s — donc
+`SOLVER_TIMEOUT` n'aurait aucun effet. `solverRequest` envoie **les deux formes**
+plutôt que de parier sur le sidecar d'en face.
+
 ### Sidecar
 
 C'est un navigateur complet (~centaines de Mo) : à réserver au strict
-nécessaire, d'où sa position en dernier palier. `docker-compose.solver.yml`
-fournit le service, **bindé sur loopback** — cet endpoint fetche des URL
-arbitraires sur demande et ne doit jamais être exposé.
+nécessaire, d'où sa position en dernier palier. Il vit dans le
+`docker-compose.yml` racine derrière le **profil `solver`**, donc il ne démarre
+pas sauf demande explicite :
 
 ```bash
-docker compose -f docker-compose.solver.yml up -d
+echo 'SOLVER_URL=http://solver:8191/v1' >> .env
+docker compose --profile solver up -d
 ```
+
+Il n'est **volontairement pas publié sur l'hôte** : cet endpoint fetche des URL
+arbitraires sur demande. L'app le joint par son nom de service sur le réseau du
+compose. Pour le tester à la main :
+
+```bash
+docker compose exec app wget -qO- http://solver:8191/health
+```
+
+Si tu lances l'app depuis un devcontainer plutôt que depuis ce compose, note que
+publier le solver sur `127.0.0.1` de l'hôte ne suffit pas : le devcontainer
+arrive par le bridge, une autre interface, et se prend un refus de connexion.
+Faire tourner les deux dans le même compose évite entièrement le problème.
 
 ### Concurrence et garde-fous
 
@@ -277,7 +298,7 @@ Variables d'environnement (voir `.env.example`) :
 |---|---|---|
 | `TLS_IMPERSONATE_ENABLED` | `true` | Client TLS imperso pour le scraping (sinon stdlib) |
 | `SOLVER_URL` | `` | Endpoint REST du sidecar ; vide = escalade navigateur désactivée |
-| `SOLVER_TIMEOUT` | `60s` | Timeout d'un solve navigateur (`maxTimeout` envoyé au sidecar) |
+| `SOLVER_TIMEOUT` | `60s` | Timeout d'un solve navigateur |
 | `SOLVER_MAX_PER_FEED` | `5` | Plafond de solves navigateur par run de feed |
 
 Le polling RSS n'est jamais concerné : toujours stdlib.

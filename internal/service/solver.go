@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -57,9 +58,16 @@ func newSolverClient(rawURL string, timeout time.Duration) *solverClient {
 }
 
 type solverRequest struct {
-	Cmd        string `json:"cmd"`
-	URL        string `json:"url"`
-	MaxTimeout int64  `json:"maxTimeout"`
+	Cmd string `json:"cmd"`
+	URL string `json:"url"`
+	// The two implementations disagree on this field: FlareSolverr reads
+	// `maxTimeout` in milliseconds, Byparr reads `max_timeout` in seconds and
+	// has no camelCase alias for it. Each ignores the key it doesn't know —
+	// FlareSolverr swallows unknown keys, Byparr's pydantic model drops extras —
+	// so sending both beats guessing which sidecar is on the other end. Send
+	// only one and the other silently falls back to its own 60s default.
+	MaxTimeoutMs      int64 `json:"maxTimeout"`
+	MaxTimeoutSeconds int64 `json:"max_timeout"`
 }
 
 type solverResponse struct {
@@ -70,6 +78,10 @@ type solverResponse struct {
 		Status    int    `json:"status"`
 		Response  string `json:"response"`
 		UserAgent string `json:"userAgent"`
+		// ContentType is a Byparr extension. It matters because a PDF comes back
+		// base64-encoded rather than as HTML, and feeding that to readability
+		// would produce an article of gibberish.
+		ContentType string `json:"contentType"`
 	} `json:"solution"`
 }
 
@@ -129,9 +141,10 @@ func (s *solverClient) fetch(ctx context.Context, u *url.URL) (*pageResponse, er
 
 func (s *solverClient) solve(ctx context.Context, u *url.URL) (*pageResponse, error) {
 	payload, err := json.Marshal(solverRequest{
-		Cmd:        "request.get",
-		URL:        u.String(),
-		MaxTimeout: s.timeout.Milliseconds(),
+		Cmd:               "request.get",
+		URL:               u.String(),
+		MaxTimeoutMs:      s.timeout.Milliseconds(),
+		MaxTimeoutSeconds: int64(s.timeout.Seconds()),
 	})
 	if err != nil {
 		return nil, err
@@ -159,6 +172,9 @@ func (s *solverClient) solve(ctx context.Context, u *url.URL) (*pageResponse, er
 	}
 	if solved.Status != "ok" {
 		return nil, fmt.Errorf("solver failed: %s", solved.Message)
+	}
+	if ct := solved.Solution.ContentType; ct != "" && !strings.HasPrefix(ct, "text/html") {
+		return nil, fmt.Errorf("solver returned %s, not HTML", ct)
 	}
 
 	body := []byte(solved.Solution.Response)

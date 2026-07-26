@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -275,5 +276,45 @@ func TestFetchPageStdlibRetryDoesNotConsumeSolveBudget(t *testing.T) {
 	}
 	if !s.hostNeedsBrowser("example.com") {
 		t.Error("host should stay marked when neither transport gets through")
+	}
+}
+
+func TestSolverRequestCarriesBothTimeoutForms(t *testing.T) {
+	// FlareSolverr reads maxTimeout (ms), Byparr reads max_timeout (seconds).
+	// Sending only one makes the other silently use its own default.
+	var got map[string]any
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"status":"ok","solution":{"status":200,"response":"<html></html>"}}`))
+	}))
+	defer sidecar.Close()
+
+	solver := newSolverClient(sidecar.URL, 45*time.Second)
+	if _, err := solver.fetch(context.Background(), mustURL(t, "https://example.com/a")); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if got["maxTimeout"] != float64(45000) {
+		t.Errorf("maxTimeout = %v, want 45000 (milliseconds)", got["maxTimeout"])
+	}
+	if got["max_timeout"] != float64(45) {
+		t.Errorf("max_timeout = %v, want 45 (seconds)", got["max_timeout"])
+	}
+	if got["cmd"] != "request.get" {
+		t.Errorf("cmd = %v, want request.get", got["cmd"])
+	}
+}
+
+func TestSolverRejectsNonHTMLSolution(t *testing.T) {
+	// Byparr base64-encodes PDFs; that must not reach readability as if it were
+	// an article.
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"status":"ok","solution":{"status":200,"contentType":"application/pdf","response":"JVBERi0xLjQK"}}`))
+	}))
+	defer sidecar.Close()
+
+	solver := newSolverClient(sidecar.URL, 5*time.Second)
+	if _, err := solver.fetch(context.Background(), mustURL(t, "https://example.com/a.pdf")); err == nil {
+		t.Fatal("expected a PDF solution to be rejected")
 	}
 }

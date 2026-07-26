@@ -49,22 +49,54 @@ type application struct {
 
 func main() {
 	var cfg config
+	var err error
 
 	// Load .env file if present
 	_ = godotenv.Load()
 
 	cfg.env = os.Getenv("ENV")
-	cfg.port, _ = strconv.Atoi(os.Getenv("PORT"))
 
-	cfg.limiter.rps, _ = strconv.ParseFloat(os.Getenv("RATE_LIMITER_RPS"), 64)
-	cfg.limiter.burst, _ = strconv.Atoi(os.Getenv("RATE_LIMITER_BURST"))
-	cfg.limiter.enabled, _ = strconv.ParseBool(os.Getenv("RATE_LIMITER_ENABLED"))
+	cfg.port = 8000
+	if v := os.Getenv("PORT"); v != "" {
+		cfg.port, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid PORT: %v", err)
+		}
+	}
+
+	cfg.limiter.rps = 5
+	if v := os.Getenv("RATE_LIMITER_RPS"); v != "" {
+		cfg.limiter.rps, err = strconv.ParseFloat(v, 64)
+		if err != nil {
+			log.Fatalf("invalid RATE_LIMITER_RPS: %v", err)
+		}
+		if cfg.limiter.rps <= 0 {
+			log.Fatalf("invalid RATE_LIMITER_RPS: must be greater than 0, got %v", cfg.limiter.rps)
+		}
+	}
+
+	cfg.limiter.burst = 10
+	if v := os.Getenv("RATE_LIMITER_BURST"); v != "" {
+		cfg.limiter.burst, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid RATE_LIMITER_BURST: %v", err)
+		}
+		if cfg.limiter.burst <= 0 {
+			log.Fatalf("invalid RATE_LIMITER_BURST: must be greater than 0, got %d", cfg.limiter.burst)
+		}
+	}
+
+	if v := os.Getenv("RATE_LIMITER_ENABLED"); v != "" {
+		cfg.limiter.enabled, err = strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid RATE_LIMITER_ENABLED: %v", err)
+		}
+	}
 
 	schedulerInterval := os.Getenv("SCHEDULER_INTERVAL")
 	if schedulerInterval == "" {
 		schedulerInterval = "15m"
 	}
-	var err error
 	cfg.scheduler.interval, err = time.ParseDuration(schedulerInterval)
 	if err != nil {
 		log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)
@@ -78,9 +110,6 @@ func main() {
 		cfg.scheduler.batchSize = 50
 	}
 
-	// Anti-bot fetching. TLS impersonation is on unless explicitly disabled: it
-	// costs nothing on normal sites and is what gets past Cloudflare's passive
-	// fingerprint filtering. RSS polling is never affected.
 	cfg.fetch.TLSImpersonate = true
 	if v := os.Getenv("TLS_IMPERSONATE_ENABLED"); v != "" {
 		cfg.fetch.TLSImpersonate, err = strconv.ParseBool(v)

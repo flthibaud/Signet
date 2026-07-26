@@ -1,0 +1,99 @@
+# Run Signet: one binary, one database — plus an optional browser sidecar.
+#
+#   docker compose up -d --build        # app + database, on http://localhost:8000
+#   docker compose logs -f app
+#   docker compose down                 # add -v to drop the database volume too
+#
+# The browser sidecar for anti-bot fetching is opt-in, since it pulls a full
+# browser image (see the `solver` service at the bottom).
+#
+# Note for devcontainer users: nothing here publishes 5432, so this stack can run
+# alongside the devcontainer's own Postgres without a port clash.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: signet
+      POSTGRES_USER: signet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-signet}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Gates both the migrations and the app: Postgres accepts connections a
+      # moment after the container starts.
+      test: ["CMD-SHELL", "pg_isready -U signet -d signet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Runs the golang-migrate migrations once, then exits. The app image ships the
+  # migrations but does not apply them itself.
+  migrate:
+    image: migrate/migrate:v4.19.1
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://signet:${POSTGRES_PASSWORD:-signet}@db:5432/signet?sslmode=disable"
+      - "up"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: ${PORT:-8000}
+      ENV: ${ENV:-production}
+      DATABASE_URI: postgres://signet:${POSTGRES_PASSWORD:-signet}@db:5432/signet?sslmode=disable
+      RATE_LIMITER_RPS: 5
+      RATE_LIMITER_BURST: 10
+      RATE_LIMITER_ENABLED: "true"
+      # Article scraping impersonates a browser TLS fingerprint by default; see
+      # docs/ANTIBOT_FETCHING.md. RSS polling is never affected.
+      TLS_IMPERSONATE_ENABLED: ${TLS_IMPERSONATE_ENABLED:-true}
+      # Empty unless you enable the solver profile below.
+      SOLVER_URL: ${SOLVER_URL:-}
+      SOLVER_TIMEOUT: ${SOLVER_TIMEOUT:-60s}
+      SOLVER_MAX_PER_FEED: ${SOLVER_MAX_PER_FEED:-5}
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${PORT:-8000}:${PORT:-8000}"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-8000}/v1/healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Browser sidecar for sites that require executing a JavaScript challenge.
+  # Opt-in: it is a full browser (hundreds of MB) and most sites are handled by
+  # the impersonated TLS client alone.
+  #
+  #   echo 'SOLVER_URL=http://solver:8191/v1' >> .env
+  #   docker compose --profile solver up -d
+  #
+  # It is deliberately not published to the host: it fetches arbitrary URLs on
+  # request, and the app reaches it over the compose network by service name.
+  solver:
+    image: ghcr.io/thephaseless/byparr:latest
+    profiles: ["solver"]
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+    # A real browser needs more shared memory than Docker's 64 MB default.
+    shm_size: 2gb
+    # No healthcheck on purpose: Byparr's /health drives a real page load, which
+    # is far too expensive to run on a loop for a service nothing depends on.
+    # Check it by hand when needed:
+    #   docker compose exec app wget -qO- http://solver:8191/health
+
+volumes:
+  postgres-data:
