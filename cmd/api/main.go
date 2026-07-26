@@ -24,7 +24,7 @@ type config struct {
 		dsn          string
 		maxOpenConns int
 		maxIdleConns int
-		maxIdleTime  string
+		maxIdleTime  time.Duration
 	}
 	limiter struct {
 		rps     float64
@@ -36,6 +36,7 @@ type config struct {
 		workers   int
 		batchSize int
 	}
+	fetch service.FetchConfig
 }
 
 type application struct {
@@ -48,22 +49,57 @@ type application struct {
 
 func main() {
 	var cfg config
+	var err error
 
 	// Load .env file if present
 	_ = godotenv.Load()
 
 	cfg.env = os.Getenv("ENV")
-	cfg.port, _ = strconv.Atoi(os.Getenv("PORT"))
 
-	cfg.limiter.rps, _ = strconv.ParseFloat(os.Getenv("RATE_LIMITER_RPS"), 64)
-	cfg.limiter.burst, _ = strconv.Atoi(os.Getenv("RATE_LIMITER_BURST"))
-	cfg.limiter.enabled, _ = strconv.ParseBool(os.Getenv("RATE_LIMITER_ENABLED"))
+	cfg.port = 8000
+	if v := os.Getenv("PORT"); v != "" {
+		cfg.port, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid PORT: %v", err)
+		}
+	}
+
+	cfg.limiter.rps = 5
+	if v := os.Getenv("RATE_LIMITER_RPS"); v != "" {
+		cfg.limiter.rps, err = strconv.ParseFloat(v, 64)
+		if err != nil {
+			log.Fatalf("invalid RATE_LIMITER_RPS: %v", err)
+		}
+		if cfg.limiter.rps <= 0 {
+			log.Fatalf("invalid RATE_LIMITER_RPS: must be greater than 0, got %v", cfg.limiter.rps)
+		}
+	}
+
+	cfg.limiter.burst = 10
+	if v := os.Getenv("RATE_LIMITER_BURST"); v != "" {
+		cfg.limiter.burst, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid RATE_LIMITER_BURST: %v", err)
+		}
+		if cfg.limiter.burst <= 0 {
+			log.Fatalf("invalid RATE_LIMITER_BURST: must be greater than 0, got %d", cfg.limiter.burst)
+		}
+	}
+
+	// Off unless asked for: whether to rate limit is a deployment decision. It
+	// only ever applies to the JSON API (see rateLimitPrefix), never to the
+	// embedded SPA's static assets.
+	if v := os.Getenv("RATE_LIMITER_ENABLED"); v != "" {
+		cfg.limiter.enabled, err = strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid RATE_LIMITER_ENABLED: %v", err)
+		}
+	}
 
 	schedulerInterval := os.Getenv("SCHEDULER_INTERVAL")
 	if schedulerInterval == "" {
 		schedulerInterval = "15m"
 	}
-	var err error
 	cfg.scheduler.interval, err = time.ParseDuration(schedulerInterval)
 	if err != nil {
 		log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)
@@ -77,12 +113,52 @@ func main() {
 		cfg.scheduler.batchSize = 50
 	}
 
+	cfg.fetch.TLSImpersonate = true
+	if v := os.Getenv("TLS_IMPERSONATE_ENABLED"); v != "" {
+		cfg.fetch.TLSImpersonate, err = strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid TLS_IMPERSONATE_ENABLED: %v", err)
+		}
+	}
+	cfg.fetch.SolverURL = os.Getenv("SOLVER_URL")
+	if v := os.Getenv("SOLVER_TIMEOUT"); v != "" {
+		cfg.fetch.SolverTimeout, err = time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid SOLVER_TIMEOUT: %v", err)
+		}
+	}
+	cfg.fetch.SolverMaxPerFeed, _ = strconv.Atoi(os.Getenv("SOLVER_MAX_PER_FEED"))
+
 	databaseURL := os.Getenv("DATABASE_URI")
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URI is not set")
 	}
 
 	cfg.db.dsn = databaseURL
+
+	cfg.db.maxOpenConns = 25
+	if v := os.Getenv("DATABASE_MAX_OPEN_CONNS"); v != "" {
+		cfg.db.maxOpenConns, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid DATABASE_MAX_OPEN_CONNS: %v", err)
+		}
+	}
+
+	cfg.db.maxIdleConns = 25
+	if v := os.Getenv("DATABASE_MAX_IDLE_CONNS"); v != "" {
+		cfg.db.maxIdleConns, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid DATABASE_MAX_IDLE_CONNS: %v", err)
+		}
+	}
+
+	cfg.db.maxIdleTime = 15 * time.Minute
+	if v := os.Getenv("DATABASE_MAX_IDLE_TIME"); v != "" {
+		cfg.db.maxIdleTime, err = time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid DATABASE_MAX_IDLE_TIME: %v", err)
+		}
+	}
 
 	logger := jsonlog.New(os.Stdout, jsonlog.LevelInfo)
 
@@ -101,7 +177,7 @@ func main() {
 	models := data.NewModels(db)
 
 	// 3. Init de la couche SERVICE (avec injection de data)
-	services := service.NewServices(models)
+	services := service.NewServices(models, logger, cfg.fetch)
 
 	// 4. Init du scheduler
 	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)
@@ -131,6 +207,7 @@ func openDB(cfg config) (*sql.DB, error) {
 	// Configurer le pool de connexion
 	db.SetMaxOpenConns(cfg.db.maxOpenConns)
 	db.SetMaxIdleConns(cfg.db.maxIdleConns)
+	db.SetConnMaxIdleTime(cfg.db.maxIdleTime)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

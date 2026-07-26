@@ -41,6 +41,15 @@ func (app *application) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
+// rateLimitPrefix scopes rate limiting to the JSON API.
+//
+// The middleware chain wraps every route, but the same binary also serves the
+// embedded SPA, and a cold page load pulls ~20 assets in one burst from a single
+// IP. Limiting those means rate.Limiter.Allow() returning false — an immediate
+// 429, not a delay — so the browser gets a page with missing chunks. The API is
+// what needs protecting; static files do not.
+const rateLimitPrefix = "/v1/"
+
 func (app *application) rateLimit(next http.Handler) http.Handler {
 	// Define a client struct to hold the rate limiter and last seen time for each
 	// client.
@@ -76,7 +85,7 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 
 	// Importantly, unlock the mutex when the cleanup is complete.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if app.config.limiter.enabled {
+		if app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, rateLimitPrefix) {
 			ip, _, err := net.SplitHostPort(r.RemoteAddr)
 			if err != nil {
 				app.serverErrorResponse(w, r, err)

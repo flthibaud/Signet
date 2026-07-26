@@ -36,6 +36,6 @@ WORKDIR /app
 COPY --from=go-builder /app/bin/api ./api
 COPY migrations ./migrations
 
-EXPOSE 4000
+EXPOSE 8000
 
 ENTRYPOINT ["./api"]
