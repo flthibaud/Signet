@@ -193,8 +193,9 @@ func plainText(s string) string {
 	return strings.TrimSpace(html.UnescapeString(stripped))
 }
 
-// createArticleFromItem crée un article depuis un RSS item
-func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash string) (*data.Article, error) {
+// createArticleFromItem crée un article depuis un RSS item. `language` est une
+// configuration de recherche PostgreSQL déjà résolue, pas un tag de langue brut.
+func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash, language string) (*data.Article, error) {
 	parsed, err := s.fetchWithReadability(ctx, item.Link)
 
 	var title, originalHTML, textContent string
@@ -224,6 +225,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		ReadingTime:  estimateReadingTime(textContent),
 		OriginalHTML: originalHTML,
 		TextContent:  textContent,
+		Language:     language,
 		PublishedAt:  getPublishedDate(item),
 	}
 
@@ -305,6 +307,12 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	// 8. Process each item. If any item fails, we must NOT persist the new
 	// ETag/Last-Modified, otherwise the next fetch gets a 304 and the items we
 	// missed are never retried.
+	// La langue déclarée par le flux (<language>, xml:lang) est la source la plus
+	// fiable dont on dispose : elle est présente sur l'écrasante majorité des
+	// flux, et la deviner à partir du texte serait moins sûr. Absente, on
+	// retombe sur la configuration neutre.
+	feedLanguage := data.ResolveTextSearchConfig(parsedFeed.Language)
+
 	itemsFailed := false
 	for _, item := range parsedFeed.Items {
 		// Stop if we've hit the processing deadline (or the app is shutting
@@ -325,7 +333,7 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 
 		// Create article if new
 		if article == nil {
-			article, err = s.createArticleFromItem(ctx, item, hash)
+			article, err = s.createArticleFromItem(ctx, item, hash, feedLanguage)
 			if err != nil {
 				itemsFailed = true
 				continue

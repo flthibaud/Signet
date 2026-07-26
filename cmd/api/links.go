@@ -29,7 +29,11 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 		app.badRequestResponse(w, r, err)
 		return
 	}
-	filters.Archived = archived != nil && *archived
+
+	if archived == nil {
+		archived = new(bool)
+	}
+	filters.Archived = archived
 	if filters.FeedID, err = readOptionalInt64(qs, "feed_id"); err != nil {
 		app.badRequestResponse(w, r, err)
 		return

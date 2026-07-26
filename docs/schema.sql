@@ -3,6 +3,12 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 -- Active l'extension pour les UUID
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "citext";
+-- Recherche insensible aux accents
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+-- Une variante « _ua » (unaccent) de chaque configuration de recherche livrée
+-- par Postgres : `french_ua`, `english_ua`, ..., plus `simple_ua`, la
+-- configuration neutre utilisée par défaut.
 
 -- ============================================================================
 -- USERS & AUTH
@@ -46,8 +52,21 @@ CREATE TABLE IF NOT EXISTS articles (
   content TEXT, -- HTML épuré/nettoyé
   text_content TEXT NOT NULL, -- Texte brut pour recherche
   
-  -- Recherche full-text
-  tsv TSVECTOR,
+  -- Recherche full-text : configuration propre à l'article, alimentée depuis
+  -- le <language> du flux.
+  language REGCONFIG NOT NULL DEFAULT 'simple_ua',
+
+  -- tsvector hybride : la moitié « langue de l'article » apporte le stemming,
+  -- la moitié `simple_ua` garantit le match littéral quelle que soit la langue
+  -- dans laquelle la requête est tapée. Colonne générée, donc pas de trigger.
+  tsv TSVECTOR GENERATED ALWAYS AS (
+      setweight(to_tsvector(language, COALESCE(title, '')), 'A') ||
+      setweight(to_tsvector('simple_ua', COALESCE(title, '')), 'A') ||
+      setweight(to_tsvector(language, COALESCE(description, '')), 'B') ||
+      setweight(to_tsvector('simple_ua', COALESCE(description, '')), 'B') ||
+      setweight(to_tsvector(language, COALESCE(text_content, '')), 'C') ||
+      setweight(to_tsvector('simple_ua', COALESCE(text_content, '')), 'C')
+  ) STORED,
   
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -102,8 +121,9 @@ CREATE TABLE IF NOT EXISTS links (
   is_starred BOOLEAN DEFAULT FALSE,
   reading_progress REAL DEFAULT 0 CHECK (reading_progress >= 0 AND reading_progress <= 1), -- 0.0 à 1.0
   reading_progress_anchor_index INTEGER NOT NULL DEFAULT 0, -- Index du paragraphe
-  
+
   -- Timestamps
+  published_at TIMESTAMP WITH TIME ZONE NOT NULL,
   saved_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   archived_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -185,6 +205,7 @@ CREATE INDEX idx_subscriptions_feed ON subscriptions(feed_id);
 -- Links
 CREATE INDEX idx_links_user_feed ON links(user_id, feed_id);
 CREATE INDEX idx_links_user_saved ON links(user_id, saved_at DESC);
+CREATE INDEX idx_links_user_published ON links(user_id, published_at DESC);
 CREATE INDEX idx_links_user_unread ON links(user_id) WHERE is_read = FALSE;
 CREATE INDEX idx_links_user_starred ON links(user_id) WHERE is_starred = TRUE;
 CREATE INDEX idx_links_article ON links(article_id);
@@ -237,18 +258,6 @@ BEGIN
 END;
 $$ LANGUAGE 'plpgsql';
 
--- Fonction pour mettre à jour le vecteur de recherche full-text
-CREATE OR REPLACE FUNCTION update_article_tsv()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.tsv := 
-        setweight(to_tsvector('french', COALESCE(NEW.title, '')), 'A') ||
-        setweight(to_tsvector('french', COALESCE(NEW.description, '')), 'B') ||
-        setweight(to_tsvector('french', COALESCE(NEW.text_content, '')), 'C');
-    RETURN NEW;
-END;
-$$ LANGUAGE 'plpgsql';
-
 -- ============================================================================
 -- TRIGGERS
 -- ============================================================================
@@ -274,8 +283,3 @@ CREATE TRIGGER update_highlights_modtime
 CREATE TRIGGER trigger_calc_reading_time 
   BEFORE INSERT OR UPDATE ON articles 
   FOR EACH ROW EXECUTE FUNCTION calculate_reading_time();
-
--- Mise à jour automatique du vecteur de recherche
-CREATE TRIGGER trigger_update_tsv
-  BEFORE INSERT OR UPDATE ON articles
-  FOR EACH ROW EXECUTE FUNCTION update_article_tsv();

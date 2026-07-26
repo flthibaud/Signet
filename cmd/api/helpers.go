@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -78,6 +79,18 @@ func readOptionalInt64(qs url.Values, key string) (*int64, error) {
 		return nil, fmt.Errorf("invalid %s parameter: must be a positive integer", key)
 	}
 	return &n, nil
+}
+
+func readOptionalTime(qs url.Values, key string) (*time.Time, error) {
+	v := qs.Get(key)
+	if v == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s parameter: must be an RFC3339 timestamp", key)
+	}
+	return &t, nil
 }
 
 // Retrieve the "id" URL parameter from the current request context, then convert it to

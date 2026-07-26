@@ -19,6 +19,7 @@ type Article struct {
 	ReadingTime  float64   `json:"reading_time_minutes"`
 	OriginalHTML string    `json:"-"`
 	TextContent  string    `json:"text_content"`
+	Language     string    `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
 	PublishedAt  time.Time `json:"published_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -32,7 +33,7 @@ func (m ArticleModel) GetByHash(ctx context.Context, hash string) (*Article, err
 	var article Article
 
 	query := `
-		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at, updated_at
+		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, language::text, published_at, created_at, updated_at
 		FROM articles
 		WHERE hash = $1`
 
@@ -48,6 +49,7 @@ func (m ArticleModel) GetByHash(ctx context.Context, hash string) (*Article, err
 		&article.ReadingTime,
 		&article.OriginalHTML,
 		&article.TextContent,
+		&article.Language,
 		&article.PublishedAt,
 		&article.CreatedAt,
 		&article.UpdatedAt,
@@ -71,8 +73,8 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 	// already inserted this article (two feeds can share the same URL), we don't
 	// fail, we just return the existing id. DO NOTHING would return no row.
 	query := `
-		INSERT INTO articles (url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO articles (url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, language, published_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::regconfig, $12, $13)
 		ON CONFLICT (hash) DO UPDATE SET hash = articles.hash
 		RETURNING id
 	`
@@ -89,6 +91,7 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 		article.ReadingTime,
 		article.OriginalHTML,
 		article.TextContent,
+		article.Language,
 		article.PublishedAt,
 		time.Now(),
 	).Scan(&article.ID)
@@ -99,7 +102,7 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 	var article Article
 	query := `
-		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, published_at, created_at, updated_at
+		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, language::text, published_at, created_at, updated_at
 		FROM articles
 		WHERE id = $1
 	`
@@ -116,6 +119,7 @@ func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 		&article.ReadingTime,
 		&article.OriginalHTML,
 		&article.TextContent,
+		&article.Language,
 		&article.PublishedAt,
 		&article.CreatedAt,
 		&article.UpdatedAt,
@@ -125,4 +129,3 @@ func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
 	}
 	return &article, nil
 }
-
