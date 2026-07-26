@@ -49,9 +49,9 @@ services:
       PORT: ${PORT:-8000}
       ENV: ${ENV:-production}
       DATABASE_URI: postgres://signet:${POSTGRES_PASSWORD:-signet}@db:5432/signet?sslmode=disable
-      RATE_LIMITER_RPS: 5
-      RATE_LIMITER_BURST: 10
-      RATE_LIMITER_ENABLED: "true"
+      RATE_LIMITER_RPS: ${RATE_LIMITER_RPS:-5}
+      RATE_LIMITER_BURST: ${RATE_LIMITER_BURST:-10}
+      RATE_LIMITER_ENABLED: ${RATE_LIMITER_ENABLED:-false}
       # Article scraping impersonates a browser TLS fingerprint by default; see
       # docs/ANTIBOT_FETCHING.md. RSS polling is never affected.
       TLS_IMPERSONATE_ENABLED: ${TLS_IMPERSONATE_ENABLED:-true}

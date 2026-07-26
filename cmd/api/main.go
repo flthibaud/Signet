@@ -86,6 +86,9 @@ func main() {
 		}
 	}
 
+	// Off unless asked for: whether to rate limit is a deployment decision. It
+	// only ever applies to the JSON API (see rateLimitPrefix), never to the
+	// embedded SPA's static assets.
 	if v := os.Getenv("RATE_LIMITER_ENABLED"); v != "" {
 		cfg.limiter.enabled, err = strconv.ParseBool(v)
 		if err != nil {
