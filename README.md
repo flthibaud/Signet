@@ -1,5 +1,7 @@
 # Signet
 
+[![CI](https://github.com/flthibaud/Signet/actions/workflows/ci.yml/badge.svg)](https://github.com/flthibaud/Signet/actions/workflows/ci.yml)
+
 Une application **read-it-later** self-hosted avec support natif des flux **RSS/Atom**, écrite en **Go** (API) et **React Router v7** (frontend).
 
 ## À propos
