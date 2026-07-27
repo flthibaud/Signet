@@ -40,6 +40,9 @@ func (app *application) serve() error {
 		// Stop the scheduler first, wait for in-flight workers
 		app.scheduler.Stop()
 
+		// Then the article imports a subscription may have left running.
+		app.services.SubscriptionService.Shutdown()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 

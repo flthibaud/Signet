@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"net/http"
-	"strconv"
-	"time"
 
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/service"
@@ -36,99 +33,33 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 
 	userID := app.contextGetUser(r).ID
 
-	// 2. Vérifie si le feed existe déjà en base
-	feed, err := app.models.Feeds.GetByURL(r.Context(), input.URL)
-	if err != nil && err != data.ErrRecordNotFound {
-		app.serverErrorResponse(w, r, err)
-		return
-	}
-
-	// 3. Si feed n'existe pas, le créer. Créer le feed demande un fetch HTTP, il
-	// ne peut donc pas partager une transaction avec l'insert de la souscription
-	// ci-dessous, on retient qu'on l'a créé pour pouvoir le reprendre si la
-	// suite échoue.
-	feedCreated := feed == nil
-	subscribed := false
-
-	// Toute sortie avant l'insert de la souscription laisserait derrière elle un
-	// feed sans abonné, que plus rien ne référence ni ne nettoie. Le garde
-	// NOT EXISTS de DeleteIfOrphan rend l'appel sûr même si un autre utilisateur
-	// vient de s'abonner à la même URL. Contexte détaché : le cas le plus
-	// probable est justement un client parti en cours de route.
-	defer func() {
-		if !feedCreated || subscribed || feed == nil {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-		defer cancel()
-		if err := app.models.Feeds.DeleteIfOrphan(ctx, feed.ID); err != nil {
-			app.logger.PrintError(err, map[string]string{
-				"context": "cleaning up orphan feed",
-				"feed_id": strconv.FormatInt(feed.ID, 10),
-			})
-		}
-	}()
-
-	if feed == nil {
-		feed, err = app.services.FeedService.CreateFromURL(r.Context(), input.URL)
-		if err != nil {
-			// Renvoie les erreurs liées au feed comme erreurs de validation sur le
-			// champ "url" afin que le client puisse les afficher au bon endroit,
-			// sans exposer les détails internes du parser.
-			switch {
-			case errors.Is(err, service.ErrInvalidFeed):
-				v.AddError("url", "the URL does not point to a valid RSS feed")
-				app.failedValidationResponse(w, r, v.Errors)
-			case errors.Is(err, service.ErrFeedNotFound):
-				v.AddError("url", "the feed could not be reached")
-				app.failedValidationResponse(w, r, v.Errors)
-			default:
-				app.serverErrorResponse(w, r, err)
-			}
-			return
-		}
-	}
-
-	// 4. Vérifie si subscription existe déjà
-	exists, err := app.models.Subscriptions.Exists(r.Context(), userID, feed.ID)
+	subscription, err := app.services.SubscriptionService.Subscribe(r.Context(), userID, input.URL)
 	if err != nil {
-		app.serverErrorResponse(w, r, err)
-		return
-	}
-
-	if exists {
-		v.AddError("url", "you are already subscribed to this feed")
-		app.failedValidationResponse(w, r, v.Errors)
-		return
-	}
-
-	// 5. Crée la subscription
-	subscription := &data.Subscription{
-		UserID: userID,
-		FeedID: feed.ID,
-	}
-
-	err = app.models.Subscriptions.Insert(r.Context(), subscription)
-	if err != nil {
-		app.serverErrorResponse(w, r, err)
-		return
-	}
-	subscribed = true
-
-	// 6. Import des articles EN BACKGROUND (non-bloquant)
-	go func() {
-		ctx := context.Background()
-		err := app.services.FeedService.ImportArticlesForSubscribers(ctx, feed)
-		if err != nil {
-			app.logger.PrintError(err, nil)
+		switch {
+		case errors.Is(err, service.ErrInvalidFeed):
+			v.AddError("url", "the URL does not point to a valid RSS feed")
+			app.failedValidationResponse(w, r, v.Errors)
+		case errors.Is(err, service.ErrFeedNotFound):
+			v.AddError("url", "the feed could not be reached")
+			app.failedValidationResponse(w, r, v.Errors)
+		case errors.Is(err, service.ErrAlreadySubscribed):
+			v.AddError("url", "you are already subscribed to this feed")
+			app.failedValidationResponse(w, r, v.Errors)
+		default:
+			app.serverErrorResponse(w, r, err)
 		}
-	}()
+		return
+	}
 
-	// 7. Retourne immédiatement (sans attendre l'import)
-	app.writeJSON(w, http.StatusCreated, envelope{
+	// L'import des articles tourne en tâche de fond, la réponse part sans
+	// l'attendre.
+	err = app.writeJSON(w, http.StatusCreated, envelope{
 		"subscription": subscription,
 		"message":      "Subscription created. Articles are being imported in the background.",
 	}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
 }
 
 func (app *application) deleteSubscriptionHandler(w http.ResponseWriter, r *http.Request) {

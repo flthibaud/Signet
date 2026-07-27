@@ -33,7 +33,7 @@ func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID 
 			WHERE user_id = $1 AND feed_id = $2
 		)`
 	var exists bool
-	err := m.DB.QueryRow(query, userID, feedID).Scan(&exists)
+	err := m.DB.QueryRowContext(ctx, query, userID, feedID).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
