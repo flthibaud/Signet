@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"log"
 	"os"
 	"strconv"
@@ -25,6 +26,7 @@ type config struct {
 		maxOpenConns int
 		maxIdleConns int
 		maxIdleTime  time.Duration
+		autoMigrate  bool
 	}
 	limiter struct {
 		rps     float64
@@ -51,6 +53,10 @@ type application struct {
 func main() {
 	var cfg config
 	var err error
+
+	var migrateOnly bool
+	flag.BoolVar(&migrateOnly, "migrate-only", false, "apply pending database migrations, then exit")
+	flag.Parse()
 
 	// Load .env file if present
 	_ = godotenv.Load()
@@ -130,9 +136,9 @@ func main() {
 	}
 	cfg.fetch.SolverMaxPerFeed, _ = strconv.Atoi(os.Getenv("SOLVER_MAX_PER_FEED"))
 
-	databaseURL := os.Getenv("DATABASE_URI")
+	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URI is not set")
+		log.Fatal("DATABASE_URL is not set")
 	}
 
 	cfg.db.dsn = databaseURL
@@ -161,7 +167,25 @@ func main() {
 		}
 	}
 
+	cfg.db.autoMigrate = true
+	if v := os.Getenv("AUTO_MIGRATE"); v != "" {
+		cfg.db.autoMigrate, err = strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid AUTO_MIGRATE: %v", err)
+		}
+	}
+
 	logger := jsonlog.New(os.Stdout, jsonlog.LevelInfo)
+
+	if migrateOnly || cfg.db.autoMigrate {
+		err = migrateUp(cfg.db.dsn, logger)
+		if err != nil {
+			logger.PrintFatal(err, nil)
+		}
+	}
+	if migrateOnly {
+		return
+	}
 
 	db, err := openDB(cfg)
 	if err != nil {

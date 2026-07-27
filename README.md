@@ -37,16 +37,36 @@ Le plus court chemin, tout en conteneurs :
 
 ```bash
 cp .env.example .env
-docker compose up -d --build
+docker compose up -d
 ```
 
-L'application écoute sur <http://localhost:8000>. Les migrations sont appliquées automatiquement avant le démarrage de l'API.
+L'image applicative est tirée depuis GHCR (`ghcr.io/flthibaud/signet`), publiée par la CI : `latest` suit `master`, `dev` suit `develop`. Rien n'est compilé sur place, donc ce fichier fonctionne tel quel sur un NAS ou un VPS sans toolchain. Pour un déploiement durable, épingler un tag de version dans `SIGNET_TAG` plutôt que de suivre `latest` : tirer une image plus récente applique ses migrations au redémarrage suivant, et une migration ne se rejoue pas à l'envers.
+
+L'application écoute sur <http://localhost:8000>. Le binaire embarque ses migrations SQL et met la base à niveau lui-même au démarrage : il n'y a pas d'étape de migration à lancer avant, ni de service dédié dans le compose. Une base vide suffit.
 
 Le conteneur applicatif tourne sous un utilisateur non privilégié, avec un système de fichiers racine en lecture seule (seul `/tmp` est un tmpfs) : rien n'est écrit sur disque, tout l'état vit dans Postgres. Son healthcheck interroge `/v1/readiness`, qui échoue si la base est injoignable.
 
+### Utiliser sa propre base PostgreSQL
+
+Le service `db` du compose est là pour dépanner : identifiants fixes, aucun port publié, joignable par la seule app. Pour brancher une base existante — managée, ou déjà présente — il suffit de renseigner `DATABASE_URL` dans le `.env` et de supprimer le service `db` du compose, plus rien d'autre n'y fait référence :
+
+```bash
+DATABASE_URL="postgres://user:motdepasse@monhote:5432/signet?sslmode=require"
+```
+
+C'est le seul réglage de base de données : il n'y a pas de variables d'hôte, d'utilisateur ou de mot de passe séparées à accorder entre elles.
+
 ```bash
 docker compose logs -f app
+docker compose pull && docker compose up -d   # mise à jour
 docker compose down          # ajouter -v pour supprimer aussi le volume Postgres
+```
+
+Pour faire tourner le compose sur une image construite depuis le working tree — tester une modif avant de la pousser — il suffit de la tagger sous le même nom :
+
+```bash
+docker build -t ghcr.io/flthibaud/signet:local .
+SIGNET_TAG=local docker compose up -d
 ```
 
 Le sidecar navigateur pour l'anti-bot est **optionnel** et derrière un profil, car il embarque un navigateur complet :
@@ -58,14 +78,15 @@ docker compose --profile solver up -d
 
 ## Configuration
 
-Toutes les variables ont un défaut sain : seule `DATABASE_URI` est obligatoire. Le binaire refuse de démarrer sur une valeur invalide plutôt que de retomber silencieusement sur zéro.
+Toutes les variables ont un défaut sain : seule `DATABASE_URL` est obligatoire. Le binaire refuse de démarrer sur une valeur invalide plutôt que de retomber silencieusement sur zéro.
 
 | Variable | Défaut | Description |
 |---|---|---|
-| `DATABASE_URI` | — | **Requis.** DSN PostgreSQL |
+| `DATABASE_URL` | — | **Requis.** DSN PostgreSQL |
 | `DATABASE_MAX_OPEN_CONNS` | `25` | Connexions ouvertes max (`0` = illimité) |
 | `DATABASE_MAX_IDLE_CONNS` | `25` | Connexions inactives conservées |
 | `DATABASE_MAX_IDLE_TIME` | `15m` | Durée avant fermeture d'une connexion inactive |
+| `AUTO_MIGRATE` | `true` | Applique les migrations en attente au démarrage |
 | `PORT` | `8000` | Port d'écoute HTTP |
 | `ENV` | `` | Nom de l'environnement, remonté par le healthcheck |
 | `RATE_LIMITER_ENABLED` | `false` | Rate limiting par IP sur `/v1/*` |
@@ -79,7 +100,7 @@ Toutes les variables ont un défaut sain : seule `DATABASE_URI` est obligatoire.
 | `SOLVER_TIMEOUT` | `60s` | Budget d'un solve navigateur |
 | `SOLVER_MAX_PER_FEED` | `5` | Plafond de solves par run de flux |
 
-Le rate limiter est **désactivé par défaut** : un self-hoster servant quelques utilisateurs de confiance n'en a pas besoin. Il ne s'applique qu'à `/v1/*`, jamais aux assets du SPA — les limiter renverrait des 429 au milieu d'un chargement de page.
+Le rate limiter est **désactivé par défaut** : un self-hoster servant quelques utilisateurs de confiance n'en a pas besoin. Il ne s'applique qu'à `/v1/*`.
 
 ## Développement
 
@@ -91,11 +112,10 @@ Le projet fournit un [devcontainer](.devcontainer/devcontainer.json) (VSCode / G
 
 ### En local
 
-Prérequis : Go 1.25+, Node.js 22+ avec pnpm, PostgreSQL 14+, et [golang-migrate](https://github.com/golang-migrate/migrate).
+Prérequis : Go 1.25+, Node.js 22+ avec pnpm, PostgreSQL 14+. Le CLI [golang-migrate](https://github.com/golang-migrate/migrate) n'est nécessaire que pour les cibles `make migrate-*` ci-dessous — créer une migration, faire un rollback, forcer une version. Le serveur, lui, applique les migrations tout seul.
 
 ```bash
-make migrate-up                       # appliquer les migrations
-go run ./cmd/api                      # API + frontend embarqué, port 8000
+go run ./cmd/api                      # migre puis sert l'API + le frontend embarqué, port 8000
 
 cd frontend && pnpm install && pnpm dev   # dev server Vite, port 5173, HMR
 ```
@@ -105,12 +125,16 @@ En développement, travailler sur <http://localhost:5173> : le dev server Vite p
 Le binaire Go sert le SPA **depuis le build embarqué** : pour voir des changements frontend sur le port 8000, il faut relancer `pnpm build` puis rebuilder le binaire.
 
 ```bash
+make migrate-create name=add_x        # nouvelle paire up/down
 make migrate-down                     # rollback de la dernière migration
 make migrate-version                  # version actuelle
+make migrate-force version=N          # sortir d'un état « Dirty database »
 make reset-db                         # drop + re-run complet
 go test ./...                         # tests Go
 cd frontend && pnpm typecheck         # typegen react-router + tsc
 ```
+
+Le binaire et le CLI partagent la même table `schema_migrations` : les deux peuvent être mélangés sans risque de désaccord sur la version en place. Si une migration casse en cours de route, la base est marquée *dirty* et tout démarrage suivant échoue avec la marche à suivre — corriger le schéma à la main, puis `make migrate-force version=N`.
 
 ### Build de production
 
@@ -120,13 +144,6 @@ go build -o bin/api ./cmd/api
 ```
 
 ## Architecture
-
-```
-React Router SPA (embarqué)  →  cmd/api/        handlers, middleware, auth
-                             →  internal/service/  fetcher RSS, scraping, scheduler
-                             →  internal/data/     accès SQL
-                             →  PostgreSQL
-```
 
 - **Go 1.25** + [`httprouter`](https://github.com/julienschmidt/httprouter), PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
 - [`gofeed`](https://github.com/mmcdole/gofeed) (RSS/Atom), [`go-readability`](https://codeberg.org/readeck/go-readability) (extraction), [`bluemonday`](https://github.com/microcosm-cc/bluemonday) (sanitization), [`tls-client`](https://github.com/bogdanfinn/tls-client) (fingerprint navigateur)
@@ -230,6 +247,7 @@ signet/
 ├── migrations/         # Migrations SQL (golang-migrate)
 ├── docs/               # Documentation technique
 ├── frontend.go         # go:embed du build frontend
+├── migrations.go       # go:embed des migrations SQL
 ├── docker-compose.yml  # app + PostgreSQL + sidecar optionnel
 ├── Dockerfile          # build multi-stages
 └── Makefile            # helpers de migration

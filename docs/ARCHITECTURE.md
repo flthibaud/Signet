@@ -544,7 +544,7 @@ LIMIT 20;
 |----------|-------------|---------|
 | `ENV` | Environnement | `development`, `production` |
 | `PORT` | Port du serveur | `4000` |
-| `DATABASE_URI` | Connection PostgreSQL | `postgres://user:pass@host/db` |
+| `DATABASE_URL` | Connection PostgreSQL | `postgres://user:pass@host/db` |
 | `RATE_LIMITER_RPS` | Requêtes/seconde par IP | `2` |
 | `RATE_LIMITER_BURST` | Capacité burst | `4` |
 | `RATE_LIMITER_ENABLED` | Activer le rate limiting | `true` |

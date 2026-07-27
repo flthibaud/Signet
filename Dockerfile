@@ -38,18 +38,12 @@ RUN adduser -D -H -u 10001 signet
 
 WORKDIR /app
 
-# Owned by root, readable/executable by everyone: the runtime user must not be
-# able to overwrite its own binary or the migrations.
 COPY --from=go-builder /app/bin/api ./api
-COPY migrations ./migrations
 
 USER signet
 
 EXPOSE 8000
 
-# Readiness, not liveness: an instance that cannot reach Postgres is not healthy
-# even though the process is fine. The shell form is what expands PORT at
-# runtime. A GET (not --spider's HEAD) because the router registers GET only.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 	CMD wget -qO- "http://127.0.0.1:${PORT:-8000}/v1/readiness" >/dev/null || exit 1
 

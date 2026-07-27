@@ -1,8 +1,16 @@
 # Run Signet: one binary, one database — plus an optional browser sidecar.
 #
-#   docker compose up -d --build        # app + database, on http://localhost:8000
+#   docker compose up -d                # app + database, on http://localhost:8000
 #   docker compose logs -f app
+#   docker compose pull && docker compose up -d   # upgrade to a newer image
 #   docker compose down                 # add -v to drop the database volume too
+#
+# The app image is pulled from GHCR; nothing here builds from source, so this
+# file works as-is on a NAS or a PaaS that has no toolchain. To run a build of
+# your working tree instead, tag it under the same name and select it:
+#
+#   docker build -t ghcr.io/flthibaud/signet:local .
+#   SIGNET_TAG=local docker compose up -d
 #
 # The browser sidecar for anti-bot fetching is opt-in, since it pulls a full
 # browser image (see the `solver` service at the bottom).
@@ -16,34 +24,17 @@ services:
     environment:
       POSTGRES_DB: signet
       POSTGRES_USER: signet
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-signet}
+      POSTGRES_PASSWORD: signet
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      # Gates both the migrations and the app: Postgres accepts connections a
-      # moment after the container starts.
       test: ["CMD-SHELL", "pg_isready -U signet -d signet"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # Runs the golang-migrate migrations once, then exits. The app image ships the
-  # migrations but does not apply them itself.
-  migrate:
-    image: migrate/migrate:v4.19.1
-    volumes:
-      - ./migrations:/migrations:ro
-    command:
-      - "-path=/migrations"
-      - "-database=postgres://signet:${POSTGRES_PASSWORD:-signet}@db:5432/signet?sslmode=disable"
-      - "up"
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: on-failure
-
   app:
-    build: .
+    image: ghcr.io/flthibaud/signet:${SIGNET_TAG:-latest}
     restart: unless-stopped
     # The app writes nothing to disk — the frontend is embedded in the binary and
     # all state lives in Postgres — so it runs unprivileged (USER in the
@@ -57,7 +48,12 @@ services:
     environment:
       PORT: ${PORT:-8000}
       ENV: ${ENV:-production}
-      DATABASE_URI: postgres://signet:${POSTGRES_PASSWORD:-signet}@db:5432/signet?sslmode=disable
+      DATABASE_URL: ${DATABASE_URL:-postgres://signet:signet@db:5432/signet?sslmode=disable}
+      # The app applies its own migrations at startup, which is why this stack
+      # has no separate migration service. Set to false only if you would rather
+      # advance the schema yourself, with `docker compose run --rm app --migrate-only`
+      # or the `make migrate-*` targets.
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
       RATE_LIMITER_RPS: ${RATE_LIMITER_RPS:-5}
       RATE_LIMITER_BURST: ${RATE_LIMITER_BURST:-10}
       RATE_LIMITER_ENABLED: ${RATE_LIMITER_ENABLED:-false}
@@ -73,8 +69,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-8000}/v1/readiness >/dev/null || exit 1"]
       interval: 30s

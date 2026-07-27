@@ -36,13 +36,15 @@ make migrate-version
 make migrate-force version=N  # Recover from a "Dirty database" error
 make reset-db                 # Drop everything + re-run
 ```
-The Makefile loads `.env` and uses `DATABASE_URI`.
+The Makefile loads `.env` and uses `DATABASE_URL`. These targets are for local schema work; **deployments do not need them**. `migrations.go` embeds `migrations/*.sql` into the binary and `cmd/api/migrate.go` applies anything pending at startup (`AUTO_MIGRATE`, on by default), which is why `docker-compose.yml` has no migration service. Both paths share the standard `schema_migrations` table, so they can be mixed. `./api --migrate-only` migrates and exits, for a PaaS release command or a job ahead of a multi-replica rollout.
+
+A new migration must be a complete `NNNNNN_name.{up,down}.sql` pair — the embed glob takes `*.sql` and golang-migrate silently skips names it cannot parse, so a typo means the migration never runs. `cmd/api/migrate_test.go` checks the embedded set against the directory.
 
 ## Architecture
 
 Request flow: **React Router SPA → API handlers/middleware → service layer → data layer → PostgreSQL.**
 
-- **`cmd/api/`** — HTTP layer. `main.go` wires config (from env), the data/service/scheduler layers, and an `application` struct that all handlers hang off. `routes.go` is the single source of truth for endpoints and for how the embedded SPA is served. `middleware.go` holds the middleware chain `recoverPanic → rateLimit → authenticate → router`. `rateLimit` wraps every route but only acts on the `/v1/` prefix (`rateLimitPrefix`): the same binary serves the embedded SPA, and throttling a cold page load's ~20 asset requests would return 429s and break it.
+- **`cmd/api/`** — HTTP layer. `main.go` wires config (from env), the data/service/scheduler layers, and an `application` struct that all handlers hang off; `migrate.go` runs the embedded migrations first, on a throwaway connection, so the pool is opened against the schema the rest of the wiring assumes. `routes.go` is the single source of truth for endpoints and for how the embedded SPA is served. `middleware.go` holds the middleware chain `recoverPanic → rateLimit → authenticate → router`. `rateLimit` wraps every route but only acts on the `/v1/` prefix (`rateLimitPrefix`): the same binary serves the embedded SPA, and throttling a cold page load's ~20 asset requests would return 429s and break it.
 - **`internal/data/`** — Data layer. `models.go` aggregates per-entity models (`Users`, `Feeds`, `Subscriptions`, `Links`, `Articles`, `Tokens`), each a struct wrapping `*sql.DB`. `ErrRecordNotFound` is the sentinel for "not found". This is the only layer that touches SQL.
 - **`internal/service/`** — Business logic. `services.go` aggregates services (currently `FeedService`); `fetcher.go` fetches/parses RSS (gofeed), extracts article content (go-readability → markdown via `internal/readability`, sanitized with bluemonday) with fallback to the RSS description; `scheduler.go` is a background worker pool (started in `serve()`) that periodically syncs feeds with per-domain rate limiting. Article scraping goes through an anti-bot ladder — `pagefetch.go` (stdlib vs browser-impersonating TLS transports), `challenge.go` (interstitial detection), `solver.go` (FlareSolverr-compatible browser sidecar), `scrape.go` (escalation, solve budget, per-host memory); see `docs/ANTIBOT_FETCHING.md`. RSS polling always uses the stdlib client.
 - **`frontend/`** — React 19 + React Router v7 in **SPA mode** (`ssr: false`), TailwindCSS v4, TanStack Query for server state, react-hook-form + zod for forms.
@@ -58,6 +60,6 @@ Request flow: **React Router SPA → API handlers/middleware → service layer �
 
 ## Configuration
 
-Config is read from environment (`.env` auto-loaded). See `.env.example`. Required: `DATABASE_URI`. Others: `PORT`, `ENV`, `RATE_LIMITER_{RPS,BURST,ENABLED}`, `SCHEDULER_{INTERVAL,WORKERS,BATCH_SIZE}` (defaults 15m / 5 / 50).
+Config is read from environment (`.env` auto-loaded). See `.env.example`. Required: `DATABASE_URL`. Others: `PORT`, `ENV`, `AUTO_MIGRATE` (default true), `RATE_LIMITER_{RPS,BURST,ENABLED}`, `SCHEDULER_{INTERVAL,WORKERS,BATCH_SIZE}` (defaults 15m / 5 / 50).
 
 A devcontainer (`.devcontainer/`) provides Go, Node/pnpm, and PostgreSQL. Further docs live in `docs/` (`ARCHITECTURE.md`, `RSS_SYNC.md`, `READABILITY_TESTING.md`, `schema.sql`).
