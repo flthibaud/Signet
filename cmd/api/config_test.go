@@ -17,6 +17,7 @@ var configKeys = []string{
 	"RATE_LIMITER_RPS",
 	"RATE_LIMITER_BURST",
 	"RATE_LIMITER_ENABLED",
+	"TRUSTED_PROXY_COUNT",
 	"SCHEDULER_INTERVAL",
 	"SCHEDULER_WORKERS",
 	"SCHEDULER_BATCH_SIZE",
@@ -63,6 +64,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		{"limiter.rps", cfg.limiter.rps, float64(5)},
 		{"limiter.burst", cfg.limiter.burst, 10},
 		{"limiter.enabled", cfg.limiter.enabled, false},
+		{"trustedProxyCount", cfg.trustedProxyCount, 0},
 		{"scheduler.interval", cfg.scheduler.interval, service.DefaultSyncInterval},
 		{"scheduler.workers", cfg.scheduler.workers, 5},
 		{"scheduler.batchSize", cfg.scheduler.batchSize, 50},
@@ -94,6 +96,7 @@ func TestLoadConfigReadsEnvironment(t *testing.T) {
 	t.Setenv("ENV", "production")
 	t.Setenv("RATE_LIMITER_ENABLED", "true")
 	t.Setenv("RATE_LIMITER_RPS", "2.5")
+	t.Setenv("TRUSTED_PROXY_COUNT", "1")
 	t.Setenv("SESSION_TTL", "168h")
 	t.Setenv("HSTS_MAX_AGE", "0")
 	t.Setenv("FETCH_ALLOW_PRIVATE_NETWORKS", "true")
@@ -113,6 +116,7 @@ func TestLoadConfigReadsEnvironment(t *testing.T) {
 		{"env", cfg.env, "production"},
 		{"limiter.enabled", cfg.limiter.enabled, true},
 		{"limiter.rps", cfg.limiter.rps, 2.5},
+		{"trustedProxyCount", cfg.trustedProxyCount, 1},
 		{"sessionTTL", cfg.sessionTTL, 168 * time.Hour},
 		// 0 disables HSTS and must survive as 0, not fall back to the default.
 		{"hstsMaxAge", cfg.hstsMaxAge, 0},
@@ -173,6 +177,8 @@ func TestLoadConfigRejectsUnusableSchedulerValues(t *testing.T) {
 		{"SCHEDULER_BATCH_SIZE", "abc"},
 		{"SCHEDULER_BATCH_SIZE", "0"},
 		{"SOLVER_MAX_PER_FEED", "-1"},
+		{"TRUSTED_PROXY_COUNT", "-1"},
+		{"TRUSTED_PROXY_COUNT", "abc"},
 	}
 
 	for _, tt := range tests {

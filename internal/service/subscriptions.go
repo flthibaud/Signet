@@ -42,6 +42,14 @@ type feedImporter interface {
 // It only has to cover the unwinding after cancellation, not the import itself.
 const shutdownGrace = 5 * time.Second
 
+// cancelledByShutdown reports whether err is nothing more than our own
+// cancellation, so background work stopped on purpose isn't reported as a
+// failure — it would otherwise log at ERROR, with a stack trace, on every
+// restart.
+func cancelledByShutdown(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, context.Canceled)
+}
+
 type SubscriptionService struct {
 	feeds   feedStore
 	subs    subscriptionStore
@@ -130,6 +138,11 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 	}
 	subscribed = true
 
+	// The caller renders the subscription it just created, so hand back the feed
+	// rather than make it fetch the list again. UnreadCount stays at zero, which
+	// is accurate: the import below hasn't produced anything yet.
+	subscription.Feed = *feed
+
 	s.importAsync(feed)
 
 	return subscription, nil
@@ -144,10 +157,9 @@ func (s *SubscriptionService) importAsync(feed *data.Feed) {
 			return
 		}
 
-		// An import cut short by Shutdown is the shutdown working, not a failure:
-		// it would otherwise log at ERROR with a stack trace on every restart.
+		// An import cut short by Shutdown is the shutdown working, not a failure.
 		// The scheduler's next tick picks the feed back up.
-		if s.ctx.Err() != nil && errors.Is(err, context.Canceled) {
+		if cancelledByShutdown(s.ctx, err) {
 			s.logger.PrintInfo("article import cancelled at shutdown", map[string]string{
 				"feed_id": strconv.FormatInt(feed.ID, 10),
 			})

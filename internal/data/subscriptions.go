@@ -167,7 +167,7 @@ func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscriptio
 	query := `
 		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, created_at)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id`
+		RETURNING id, created_at`
 
 	err := m.DB.QueryRowContext(ctx,
 		query,
@@ -176,7 +176,7 @@ func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscriptio
 		subscription.CustomTitle,
 		subscription.CustomIcon,
 		time.Now(),
-	).Scan(&subscription.ID)
+	).Scan(&subscription.ID, &subscription.CreatedAt)
 
 	if err != nil {
 		return err

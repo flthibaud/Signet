@@ -27,9 +27,10 @@ type config struct {
 		workers   int
 		batchSize int
 	}
-	hstsMaxAge int
-	sessionTTL time.Duration
-	fetch      service.FetchConfig
+	hstsMaxAge        int
+	sessionTTL        time.Duration
+	trustedProxyCount int
+	fetch             service.FetchConfig
 }
 
 // loadConfig reads the application's configuration from the environment.
@@ -55,6 +56,13 @@ func loadConfig() (config, error) {
 	// only ever applies to the JSON API (see rateLimitPrefix), never to the
 	// embedded SPA's static assets.
 	cfg.limiter.enabled = l.Bool("RATE_LIMITER_ENABLED", false)
+
+	// How many reverse proxies sit between the internet and this binary. Zero —
+	// the default — buckets rate limiting on the peer address, which is right
+	// only when the binary is directly exposed. See clientIP for why this is a
+	// count rather than a list of trusted addresses.
+	cfg.trustedProxyCount = l.Int("TRUSTED_PROXY_COUNT", 0)
+	l.Check(cfg.trustedProxyCount >= 0, "TRUSTED_PROXY_COUNT", "must not be negative")
 
 	cfg.scheduler.interval = l.Duration("SCHEDULER_INTERVAL", service.DefaultSyncInterval)
 	l.Check(cfg.scheduler.interval > 0, "SCHEDULER_INTERVAL", "must be positive")

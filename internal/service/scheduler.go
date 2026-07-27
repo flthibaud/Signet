@@ -169,17 +169,38 @@ func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 				"feed_id": strconv.FormatInt(job.feed.ID, 10),
 				"url":     job.feed.Url,
 			})
-			s.services.FeedService.models.Feeds.MarkFeedFailed(ctx, job.feed.ID)
+
+			// Detached context: a panic during shutdown arrives with ctx already
+			// cancelled, and that is exactly when the failure needs recording.
+			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if _, err := s.services.models.Feeds.MarkFeedFailed(markCtx, job.feed.ID); err != nil {
+				s.logger.PrintError(err, map[string]string{
+					"context": "marking feed failed after panic",
+					"feed_id": strconv.FormatInt(job.feed.ID, 10),
+				})
+			}
 		}
 	}()
 
-	// Rate limit per domain
+	// Rate limit per domain. Wait only errors when the context is done, which on
+	// this path means Stop was called — carrying on would fetch with a dead
+	// context and report the failure as if the feed were at fault.
 	domain := extractDomain(job.feed.Url)
 	limiter := s.getOrCreateLimiter(domain)
-	_ = limiter.Wait(ctx)
+	if err := limiter.Wait(ctx); err != nil {
+		return
+	}
 
 	err := s.services.FeedService.ImportArticlesForSubscribers(ctx, job.feed)
 	if err != nil {
+		if cancelledByShutdown(ctx, err) {
+			s.logger.PrintInfo("feed sync cancelled at shutdown", map[string]string{
+				"feed_id": strconv.FormatInt(job.feed.ID, 10),
+			})
+			return
+		}
+
 		s.logger.PrintError(err, map[string]string{
 			"feed_id": strconv.FormatInt(job.feed.ID, 10),
 			"url":     job.feed.Url,

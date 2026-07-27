@@ -153,9 +153,30 @@ secureHeaders → recoverPanic → rateLimit → authenticate → requireAuthent
 
 1. **secureHeaders** : Pose les en-têtes de sécurité sur *toutes* les réponses (voir ci-dessous). En premier pour qu'un 429 ou une panic récupérée les portent aussi.
 2. **recoverPanic** : Capture les panics et retourne une erreur 500
-3. **rateLimit** : Limite par IP (configurable RPS + burst)
+3. **rateLimit** : Limite par IP client (configurable RPS + burst, voir ci-dessous)
 4. **authenticate** : Valide le token Bearer ou le cookie `auth_token`, attache l'user au contexte — un token absent ou périmé donne `data.AnonymousUser`, pas un 401 (les pages invité du SPA doivent rester accessibles)
 5. **requireAuthenticatedUser** : Renvoie 401 sur tout `/v1/` pour un user anonyme. Les exceptions sont listées dans `publicAPIRoutes` : `GET /v1/healthcheck`, `GET /v1/readiness`, `POST /v1/users`, `POST` et `DELETE /v1/tokens/authentication` (le logout doit pouvoir expirer un cookie périmé). Une nouvelle route est donc protégée par défaut.
+
+### Identification du client derrière un proxy
+
+`rateLimit` a besoin de savoir *qui* parle. L'adresse de la connexion TCP ne le dit pas dès qu'un reverse proxy est devant : elle vaut alors celle du proxy, identique pour tout le monde, et `RATE_LIMITER_RPS` devient un plafond partagé par l'instance entière — un seul abuseur throttle tous les utilisateurs.
+
+Les proxys consignent ce qu'ils ont vu dans `X-Forwarded-For`, **en ajoutant à droite** au fur et à mesure que la requête progresse vers l'intérieur. Les entrées les plus à droite sont donc celles écrites par notre propre infrastructure ; celles de gauche peuvent avoir été forgées par le client. Lire l'en-tête naïvement est pire que ne pas le lire : il suffirait de faire varier la valeur de gauche pour obtenir un bucket neuf à chaque requête, et le limiteur ne limiterait plus rien.
+
+`TRUSTED_PROXY_COUNT` déclare combien de sauts, en partant de la droite, sont les nôtres. `clientIP` lit la Nième entrée depuis ce bord : une valeur forgée n'est que poussée vers la gauche par chaque ajout, là où on ne regarde jamais.
+
+```
+TRUSTED_PROXY_COUNT=1
+  XFF: "203.0.113.7"                → 203.0.113.7   (le proxy a consigné le client)
+  XFF: "1.2.3.4, 203.0.113.7"       → 203.0.113.7   (le client a forgé "1.2.3.4")
+
+TRUSTED_PROXY_COUNT=2               (un CDN devant le proxy local)
+  XFF: "203.0.113.7, 172.16.0.1"    → 203.0.113.7
+```
+
+Un compteur plutôt qu'une liste d'adresses de confiance à la `set_real_ip_from` : sous Docker ou sur un PaaS, l'adresse du proxy est une IP de conteneur qui change au redéploiement. La valeur à poser est le nombre de proxys qui ajoutent un `X-Forwarded-For` entre Internet et le binaire — `1` pour un Traefik ou un Coolify seul, `2` avec un Cloudflare devant. Le défaut `0` ignore l'en-tête et conserve le comportement d'une instance directement exposée.
+
+Se tromper n'est pas symétrique : **trop haut** est sans danger (la chaîne est plus courte que N, on retombe sur l'adresse de la connexion), **trop bas** fait lire une entrée écrite par un maillon non fiable, donc falsifiable. En cas de doute, surestimer.
 
 ### En-têtes de sécurité
 

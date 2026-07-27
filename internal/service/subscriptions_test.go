@@ -162,6 +162,11 @@ func TestSubscribeCreatesMissingFeed(t *testing.T) {
 	if sub.FeedID != newFeed.ID || sub.UserID != userID {
 		t.Errorf("subscription: got feed %d / user %v, want %d / %v", sub.FeedID, sub.UserID, newFeed.ID, userID)
 	}
+	// The caller renders what it just created, so the feed travels back with it
+	// rather than costing a second round trip.
+	if sub.Feed.ID != newFeed.ID || sub.Feed.Url != newFeed.Url {
+		t.Errorf("embedded feed: got %+v, want id %d / url %q", sub.Feed, newFeed.ID, newFeed.Url)
+	}
 	if len(feeds.deletedIDs) != 0 {
 		t.Errorf("nothing failed, so no feed should have been cleaned up: %v", feeds.deletedIDs)
 	}

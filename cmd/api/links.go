@@ -129,7 +129,10 @@ func (app *application) updateLinkHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	if upd.IsEmpty() {
-		app.writeJSON(w, http.StatusOK, envelope{"message": "no changes applied"}, nil)
+		err = app.writeJSON(w, http.StatusOK, envelope{"message": "no changes applied"}, nil)
+		if err != nil {
+			app.serverErrorResponse(w, r, err)
+		}
 		return
 	}
 

@@ -110,6 +110,59 @@ func (app *application) recoverPanic(next http.Handler) http.Handler {
 
 const apiPrefix = "/v1/"
 
+// clientIP resolves the address rate limiting buckets on.
+//
+// Straight off the connection, that address is whoever opened the socket — which
+// behind a reverse proxy is the proxy, putting every user in one bucket. Proxies
+// record what they saw in X-Forwarded-For, appending on the right as the request
+// travels inward, so the rightmost entries are the ones our own infrastructure
+// wrote and the leftmost may have been forged by the client. Reading the header
+// naively is worse than not reading it: anyone could vary the leftmost value and
+// get a fresh bucket per request.
+//
+// config.trustedProxyCount says how many hops on the right are ours, so the
+// client is the Nth entry counting from that side. A forged value only ever gets
+// pushed further left as each proxy appends, and we never look there.
+//
+// A count rather than a list of trusted addresses because under Docker or a PaaS
+// the proxy's address is a container IP that changes on redeploy. Anything that
+// doesn't add up — fewer entries than trusted hops, an entry that isn't an
+// address — falls back to the peer address, which is the pre-existing behaviour
+// and never less safe.
+func (app *application) clientIP(r *http.Request) string {
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// No port to strip (unusual, but RemoteAddr is not guaranteed to carry
+		// one); the raw value still keys a bucket consistently.
+		peer = r.RemoteAddr
+	}
+
+	n := app.config.trustedProxyCount
+	if n <= 0 {
+		return peer
+	}
+
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded == "" {
+		return peer
+	}
+
+	entries := strings.Split(forwarded, ",")
+	i := len(entries) - n
+	if i < 0 {
+		// Fewer hops than configured: the leftmost entries are missing, so the
+		// one we would read is not the one we trust.
+		return peer
+	}
+
+	candidate := strings.TrimSpace(entries[i])
+	if net.ParseIP(candidate) == nil {
+		return peer
+	}
+
+	return candidate
+}
+
 func (app *application) rateLimit(next http.Handler) http.Handler {
 	// Define a client struct to hold the rate limiter and last seen time for each
 	// client.
@@ -125,32 +178,32 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 	)
 
 	// Launch a background goroutine which removes old entries from the clients map once
-	// every minute.
-	go func() {
-		for {
-			time.Sleep(time.Minute)
-			// Lock the mutex to prevent any rate limiter checks from happening while
-			// the cleanup is taking place.
-			mu.Lock()
-			// Loop through all clients. If they haven't been seen within the last three
-			// minutes, delete the corresponding entry from the map.
-			for ip, client := range clients {
-				if time.Since(client.lastSeen) > 3*time.Minute {
-					delete(clients, ip)
+	// every minute. Only worth running when the limiter is on — the map stays
+	// empty otherwise, and the configuration is fixed by the time the middleware
+	// chain is built.
+	if app.config.limiter.enabled {
+		go func() {
+			for {
+				time.Sleep(time.Minute)
+				// Lock the mutex to prevent any rate limiter checks from happening while
+				// the cleanup is taking place.
+				mu.Lock()
+				// Loop through all clients. If they haven't been seen within the last three
+				// minutes, delete the corresponding entry from the map.
+				for ip, client := range clients {
+					if time.Since(client.lastSeen) > 3*time.Minute {
+						delete(clients, ip)
+					}
 				}
+				mu.Unlock()
 			}
-			mu.Unlock()
-		}
-	}()
+		}()
+	}
 
 	// Importantly, unlock the mutex when the cleanup is complete.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, apiPrefix) {
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				app.serverErrorResponse(w, r, err)
-				return
-			}
+			ip := app.clientIP(r)
 			mu.Lock()
 			if _, found := clients[ip]; !found {
 				// Create and add a new client struct to the map if it doesn't already exist.

@@ -42,6 +42,185 @@ func countRequests(app *application, path string, n int) (served int, lastStatus
 	return served, lastStatus
 }
 
+// The proxy chain is what stands between the limiter and either uselessness (one
+// bucket for a whole instance) or trivial bypass (a bucket per forged header),
+// so every branch of clientIP is pinned here.
+func TestClientIP(t *testing.T) {
+	const peer = "10.0.0.5" // the reverse proxy, as seen on the socket
+
+	tests := []struct {
+		name         string
+		trustedCount int
+		forwarded    string
+		want         string
+	}{
+		{
+			name:         "no proxy configured ignores the header entirely",
+			trustedCount: 0,
+			forwarded:    "203.0.113.7",
+			want:         peer,
+		},
+		{
+			name:         "no proxy and no header",
+			trustedCount: 0,
+			want:         peer,
+		},
+		{
+			// One proxy in front: it recorded the address it accepted the
+			// connection from, which is the client.
+			name:         "one trusted proxy",
+			trustedCount: 1,
+			forwarded:    "203.0.113.7",
+			want:         "203.0.113.7",
+		},
+		{
+			// The test that matters. The client sent "1.2.3.4" itself; the proxy
+			// appended what it actually saw. Reading from the left would hand out
+			// a fresh bucket for every forged value.
+			name:         "forged header is pushed left and ignored",
+			trustedCount: 1,
+			forwarded:    "1.2.3.4, 203.0.113.7",
+			want:         "203.0.113.7",
+		},
+		{
+			name:         "forged header with several fake hops",
+			trustedCount: 1,
+			forwarded:    "1.2.3.4, 5.6.7.8, 9.10.11.12, 203.0.113.7",
+			want:         "203.0.113.7",
+		},
+		{
+			// A CDN in front of the local proxy: the CDN recorded the client, the
+			// local proxy recorded the CDN.
+			name:         "two trusted proxies",
+			trustedCount: 2,
+			forwarded:    "203.0.113.7, 172.16.0.1",
+			want:         "203.0.113.7",
+		},
+		{
+			name:         "two trusted proxies with a forged prefix",
+			trustedCount: 2,
+			forwarded:    "1.2.3.4, 203.0.113.7, 172.16.0.1",
+			want:         "203.0.113.7",
+		},
+		{
+			// Fewer hops than configured — the entry we would read was not
+			// written by anything we trust.
+			name:         "header shorter than the trusted count",
+			trustedCount: 2,
+			forwarded:    "203.0.113.7",
+			want:         peer,
+		},
+		{
+			name:         "trusted proxy but no header at all",
+			trustedCount: 1,
+			want:         peer,
+		},
+		{
+			name:         "entry that is not an address",
+			trustedCount: 1,
+			forwarded:    "not-an-ip",
+			want:         peer,
+		},
+		{
+			name:         "surrounding whitespace is trimmed",
+			trustedCount: 1,
+			forwarded:    "1.2.3.4,   203.0.113.7  ",
+			want:         "203.0.113.7",
+		},
+		{
+			name:         "IPv6 client",
+			trustedCount: 1,
+			forwarded:    "2001:db8::1",
+			want:         "2001:db8::1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &application{}
+			app.config.trustedProxyCount = tt.trustedCount
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/links", nil)
+			req.RemoteAddr = peer + ":54321"
+			if tt.forwarded != "" {
+				req.Header.Set("X-Forwarded-For", tt.forwarded)
+			}
+
+			if got := app.clientIP(req); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// RemoteAddr is documented as host:port but nothing enforces it; a value without
+// a port must still key a bucket rather than fail the request.
+func TestClientIPWithPortlessRemoteAddr(t *testing.T) {
+	app := &application{}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/links", nil)
+	req.RemoteAddr = "192.0.2.10"
+
+	if got := app.clientIP(req); got != "192.0.2.10" {
+		t.Errorf("got %q, want %q", got, "192.0.2.10")
+	}
+}
+
+// End to end through the middleware: the whole point of the change is that users
+// behind one proxy stop sharing a budget.
+func TestRateLimitBucketsPerForwardedClient(t *testing.T) {
+	t.Run("separate budgets behind a trusted proxy", func(t *testing.T) {
+		app := newRateLimitedApp()
+		app.config.trustedProxyCount = 1
+
+		// Same middleware instance, so the two share the clients map.
+		handler := app.rateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		codes := make([]int, 0, 4)
+		for _, forwarded := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.1", "203.0.113.2"} {
+			req := httptest.NewRequest(http.MethodGet, "/v1/links", nil)
+			req.RemoteAddr = "10.0.0.5:1234"
+			req.Header.Set("X-Forwarded-For", forwarded)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			codes = append(codes, rr.Code)
+		}
+
+		// Burst of 1 each: both get through once, both are rejected the second time.
+		want := []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests, http.StatusTooManyRequests}
+		for i, code := range codes {
+			if code != want[i] {
+				t.Errorf("request %d: got %d, want %d (all codes: %v)", i, code, want[i], codes)
+			}
+		}
+	})
+
+	t.Run("without a trusted proxy the header is ignored", func(t *testing.T) {
+		app := newRateLimitedApp()
+		app.config.trustedProxyCount = 0
+
+		handler := app.rateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		var codes []int
+		for _, forwarded := range []string{"203.0.113.1", "203.0.113.2"} {
+			req := httptest.NewRequest(http.MethodGet, "/v1/links", nil)
+			req.RemoteAddr = "10.0.0.5:1234"
+			req.Header.Set("X-Forwarded-For", forwarded)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			codes = append(codes, rr.Code)
+		}
+
+		if codes[0] != http.StatusOK || codes[1] != http.StatusTooManyRequests {
+			t.Errorf("distinct headers must share one bucket at count 0, got %v", codes)
+		}
+	})
+}
+
 func TestRateLimitAppliesToAPI(t *testing.T) {
 	served, lastStatus := countRequests(newRateLimitedApp(), "/v1/links", 5)
 
