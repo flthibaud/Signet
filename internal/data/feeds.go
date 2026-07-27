@@ -108,25 +108,42 @@ func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 	return &feed, nil
 }
 
+// SyncLockWindow is how long a claimed feed (fetching_since) stays reserved
+// before another worker may consider the lock stale and reclaim it. It must
+// stay above service.feedProcessTimeout so a slow-but-alive sync is never
+// picked up twice.
+const SyncLockWindow = 10 * time.Minute
+
+// syncIntervalSlack shrinks the refresh interval when testing eligibility.
+// last_fetched_at is stamped when a sync *finishes*, i.e. slightly after the
+// tick that started it, so an exact comparison would always push a feed to the
+// tick after the next one and halve the effective refresh rate.
+const syncIntervalSlack = 0.9
+
 // GetFeedsToSync atomically claims a batch of feeds ready for synchronization.
-// Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
-func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int) ([]*Feed, error) {
+// A feed is due once refreshInterval has elapsed since its last successful
+// fetch. Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
+func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInterval time.Duration) ([]*Feed, error) {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NOW()
 		WHERE id IN (
 			SELECT id FROM feeds f
 			WHERE f.is_active = TRUE
-			  AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - INTERVAL '10 minutes')
+			  AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - make_interval(secs => $2::double precision))
 			  AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.feed_id = f.id)
-			  AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - INTERVAL '15 minutes')
+			  AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - make_interval(secs => $3::double precision))
 			ORDER BY f.last_fetched_at ASC NULLS FIRST
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING id, url, http_etag, http_last_modified`
 
-	rows, err := m.DB.QueryContext(ctx, query, batchSize)
+	rows, err := m.DB.QueryContext(ctx, query,
+		batchSize,
+		SyncLockWindow.Seconds(),
+		refreshInterval.Seconds()*syncIntervalSlack,
+	)
 	if err != nil {
 		return nil, err
 	}

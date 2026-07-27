@@ -36,8 +36,8 @@ var (
 const UserAgent = browserUserAgent
 
 // feedProcessTimeout bounds how long a single feed sync may run. It must stay
-// below the GetFeedsToSync lock window (10 minutes) so we always release the
-// feed before another worker considers the lock stale and reclaims it.
+// below data.SyncLockWindow so we always release the feed before another worker
+// considers the lock stale and reclaims it.
 const feedProcessTimeout = 8 * time.Minute
 
 // scrapeTimeout bounds a single article fetch, whichever transport handles it.

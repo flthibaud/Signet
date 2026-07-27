@@ -26,7 +26,16 @@ type Scheduler struct {
 	domainLimiters sync.Map // map[string]*rate.Limiter
 }
 
+// DefaultSyncInterval is used when no valid interval is configured. A
+// non-positive one would panic time.NewTicker and make every feed permanently
+// due in GetFeedsToSync.
+const DefaultSyncInterval = 15 * time.Minute
+
 func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
+	if interval <= 0 {
+		interval = DefaultSyncInterval
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		services:  services,
@@ -76,7 +85,7 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) syncFeeds() {
 	ctx := s.ctx
 
-	feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize)
+	feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
 	if err != nil {
 		s.logger.PrintError(err, map[string]string{"component": "scheduler"})
 		return

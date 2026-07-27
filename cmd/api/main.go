@@ -103,13 +103,15 @@ func main() {
 		}
 	}
 
-	schedulerInterval := os.Getenv("SCHEDULER_INTERVAL")
-	if schedulerInterval == "" {
-		schedulerInterval = "15m"
-	}
-	cfg.scheduler.interval, err = time.ParseDuration(schedulerInterval)
-	if err != nil {
-		log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)
+	cfg.scheduler.interval = service.DefaultSyncInterval
+	if v := os.Getenv("SCHEDULER_INTERVAL"); v != "" {
+		cfg.scheduler.interval, err = time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)
+		}
+		if cfg.scheduler.interval <= 0 {
+			log.Fatalf("invalid SCHEDULER_INTERVAL: must be positive, got %s", v)
+		}
 	}
 	cfg.scheduler.workers, _ = strconv.Atoi(os.Getenv("SCHEDULER_WORKERS"))
 	if cfg.scheduler.workers == 0 {

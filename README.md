@@ -23,7 +23,7 @@ L'objectif est de proposer une alternative légère, self-hostable, avec un seul
 
 - Inscription / connexion par email, avec token Bearer **ou** cookie httpOnly
 - Abonnement à des flux RSS/Atom, import des articles dès l'abonnement
-- **Synchronisation en tâche de fond** : pool de workers, toutes les 15 min, avec ETag / `If-Modified-Since` et rate limit par domaine
+- **Synchronisation en tâche de fond** : pool de workers, toutes les 15 min par défaut (`SCHEDULER_INTERVAL`), avec ETag / `If-Modified-Since` et rate limit par domaine
 - **Extraction du contenu** via readability puis conversion en markdown, avec repli sur la description RSS
 - **Fetch anti-bot** : fingerprint TLS de navigateur par défaut, sidecar navigateur optionnel pour les challenges JS ([docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md))
 - **Déduplication** : l'article est stocké une fois, `links` porte l'état par utilisateur
@@ -88,7 +88,7 @@ Toutes les variables ont un défaut sain : seule `DATABASE_URL` est obligatoire.
 | `DATABASE_MAX_IDLE_TIME` | `15m` | Durée avant fermeture d'une connexion inactive |
 | `AUTO_MIGRATE` | `true` | Applique les migrations en attente au démarrage |
 | `PORT` | `8000` | Port d'écoute HTTP |
-| `ENV` | `` | Nom de l'environnement, remonté par le healthcheck |
+| `ENV` | `` (`production` via compose) | Nom de l'environnement ; `production` active le flag `Secure` sur le cookie d'auth |
 | `RATE_LIMITER_ENABLED` | `false` | Rate limiting par IP sur `/v1/*` |
 | `RATE_LIMITER_RPS` | `5` | Requêtes par seconde et par IP |
 | `RATE_LIMITER_BURST` | `10` | Taille du seau |

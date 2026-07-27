@@ -90,9 +90,9 @@ SET fetching_since = NOW()
 WHERE id IN (
     SELECT id FROM feeds f
     WHERE f.is_active = TRUE
-      AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - INTERVAL '10 minutes')
+      AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - make_interval(secs => $2::double precision))
       AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.feed_id = f.id)
-      AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - INTERVAL '15 minutes')
+      AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - make_interval(secs => $3::double precision))
     ORDER BY f.last_fetched_at ASC NULLS FIRST
     LIMIT $1
     FOR UPDATE SKIP LOCKED
@@ -102,7 +102,8 @@ RETURNING id, url, http_etag, http_last_modified;
 
 **Notes :**
 - `last_fetched_at` n'est **pas** mis à jour ici. Il sera mis à jour uniquement après un fetch réussi, ce qui évite de devoir restaurer sa valeur précédente en cas d'échec.
-- `fetching_since` avec un seuil de 10 minutes remplace le booléen `is_fetching` : si un worker crash, le lock expire automatiquement et le feed redevient éligible au prochain tick.
+- `$2` est la fenêtre de lock (`data.SyncLockWindow`, 10 min, constante) : `fetching_since` remplace le booléen `is_fetching`, donc si un worker crash le lock expire automatiquement et le feed redevient éligible au prochain tick. Elle doit rester au-dessus de `feedProcessTimeout` (8 min).
+- `$3` est l'intervalle de rafraîchissement, dérivé de `SCHEDULER_INTERVAL` — c'est le même paramètre qui pilote le ticker, sinon régler `SCHEDULER_INTERVAL` n'aurait aucun effet sur la fréquence réelle. On applique une marge de 10 % (`syncIntervalSlack`) parce que `last_fetched_at` est écrit à la *fin* du sync, quelques secondes après le tick qui l'a lancé : sans cette marge, un feed raterait systématiquement le tick suivant et ne serait rafraîchi qu'un tick sur deux.
 
 #### 4. Distribution aux abonnés (`internal/service/fetcher.go`)
 
