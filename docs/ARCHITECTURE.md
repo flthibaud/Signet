@@ -145,16 +145,47 @@ L'application suit une architecture en 3 couches :
 
 ### Middleware
 
-Les requêtes passent par 4 middleware dans cet ordre :
+Les requêtes passent par 5 middleware dans cet ordre :
 
 ```go
-recoverPanic → rateLimit → authenticate → requireAuthenticatedUser → handler
+secureHeaders → recoverPanic → rateLimit → authenticate → requireAuthenticatedUser → handler
 ```
 
-1. **recoverPanic** : Capture les panics et retourne une erreur 500
-2. **rateLimit** : Limite par IP (configurable RPS + burst)
-3. **authenticate** : Valide le token Bearer ou le cookie `auth_token`, attache l'user au contexte — un token absent ou périmé donne `data.AnonymousUser`, pas un 401 (les pages invité du SPA doivent rester accessibles)
-4. **requireAuthenticatedUser** : Renvoie 401 sur tout `/v1/` pour un user anonyme. Les exceptions sont listées dans `publicAPIRoutes` : `GET /v1/healthcheck`, `GET /v1/readiness`, `POST /v1/users`, `POST` et `DELETE /v1/tokens/authentication` (le logout doit pouvoir expirer un cookie périmé). Une nouvelle route est donc protégée par défaut.
+1. **secureHeaders** : Pose les en-têtes de sécurité sur *toutes* les réponses (voir ci-dessous). En premier pour qu'un 429 ou une panic récupérée les portent aussi.
+2. **recoverPanic** : Capture les panics et retourne une erreur 500
+3. **rateLimit** : Limite par IP (configurable RPS + burst)
+4. **authenticate** : Valide le token Bearer ou le cookie `auth_token`, attache l'user au contexte — un token absent ou périmé donne `data.AnonymousUser`, pas un 401 (les pages invité du SPA doivent rester accessibles)
+5. **requireAuthenticatedUser** : Renvoie 401 sur tout `/v1/` pour un user anonyme. Les exceptions sont listées dans `publicAPIRoutes` : `GET /v1/healthcheck`, `GET /v1/readiness`, `POST /v1/users`, `POST` et `DELETE /v1/tokens/authentication` (le logout doit pouvoir expirer un cookie périmé). Une nouvelle route est donc protégée par défaut.
+
+### En-têtes de sécurité
+
+Le binaire sert lui-même le SPA : ces en-têtes sont sa responsabilité, pas celle d'un reverse proxy dont on ne peut rien supposer. `secureHeaders` les pose sur l'API comme sur les assets statiques.
+
+| En-tête | Valeur |
+|---------|--------|
+| `Content-Security-Policy` | voir ci-dessous |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` (redondant avec `frame-ancestors`, gardé pour les vieux navigateurs) |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Strict-Transport-Security` | `max-age=31536000`, **uniquement en HTTPS** |
+
+**HSTS** n'est envoyé que si la requête est arrivée en HTTPS (`r.TLS` non nil, ou `X-Forwarded-Proto: https` posé par le proxy qui termine TLS). Sans ce garde-fou, une installation en HTTP sur un hostname de LAN se verrouillerait elle-même pour un an. `X-Forwarded-Proto` est falsifiable, mais mentir dessus n'active HSTS que dans le navigateur du menteur. `HSTS_MAX_AGE=0` désactive l'en-tête ; `includeSubDomains` n'est pas posé par défaut, une instance à l'apex d'un domaine casserait les autres sous-domaines en HTTP.
+
+**CSP** :
+
+```
+default-src 'self'; script-src 'self' 'nonce-<aléatoire>'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: https: http:; media-src 'self' https: http:; font-src 'self';
+connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self';
+form-action 'self'; frame-ancestors 'none'
+```
+
+- **`script-src` avec nonce** : le shell HTML produit par Vite s'amorce depuis des `<script>` inline, donc `'self'` seul ne suffit pas. Plutôt que `'unsafe-inline'` (qui annule à peu près l'intérêt de la CSP), `secureHeaders` génère un nonce par requête et `serveIndex` l'estampille sur chaque balise `<script>` du shell. Conséquence : le shell est servi en `Cache-Control: no-store` — une copie en cache rejouerait un nonce périmé contre un en-tête frais et la page resterait blanche. Il fait ~2 Ko, et les assets qu'il tire restent cachables (leur nom porte un hash).
+- **`style-src 'unsafe-inline'`** : l'UI pose des styles depuis JavaScript ; serrer cette directive casserait des composants pour un gain marginal (l'injection de CSS est bien moins exploitable que celle de JS).
+- **`img-src` / `media-src` larges** : le contenu des articles vient de sites arbitraires et est rendu avec ses images d'origine. `http:` reste autorisé pour les installations servies en clair ; en HTTPS le navigateur bloque de toute façon le contenu mixte.
+- **`connect-src 'self'`** : le frontend n'appelle que l'API en same-origin (chemins relatifs `/v1/...`).
+
+`cmd/api/middleware_test.go` vérifie le nonce contre le shell réellement embarqué : un build frontend qui émettrait ses `<script>` sous une forme que `addScriptNonce` ne reconnaît pas échoue en test, pas dans le navigateur.
 
 ### Format des réponses
 
@@ -549,6 +580,7 @@ LIMIT 20;
 | `RATE_LIMITER_RPS` | Requêtes/seconde par IP | `2` |
 | `RATE_LIMITER_BURST` | Capacité burst | `4` |
 | `RATE_LIMITER_ENABLED` | Activer le rate limiting | `true` |
+| `HSTS_MAX_AGE` | Durée HSTS en secondes, `0` pour désactiver | `31536000` |
 
 ### Structure application
 

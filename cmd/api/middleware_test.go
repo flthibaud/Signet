@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/tls"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/fstest"
 
+	"github.com/flthibaud/signet"
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/google/uuid"
 )
@@ -172,5 +177,203 @@ func TestRateLimitDisabledLetsAPIThrough(t *testing.T) {
 	}
 	if lastStatus != http.StatusOK {
 		t.Errorf("last status = %d, want %d", lastStatus, http.StatusOK)
+	}
+}
+
+// newSecureHeadersApp builds an application with HSTS configured, wrapped
+// around a handler that just returns 200.
+func newSecureHeadersApp() (*application, http.Handler) {
+	app := &application{}
+	app.config.hstsMaxAge = 31536000
+
+	return app, app.secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+}
+
+func TestSecureHeadersSetOnEveryResponse(t *testing.T) {
+	// The binary serves the SPA itself, so these are its responsibility on the
+	// static assets as much as on the API.
+	for _, path := range []string{"/", "/app/reader", "/assets/index-abc123.js", "/v1/links"} {
+		t.Run(path, func(t *testing.T) {
+			_, handler := newSecureHeadersApp()
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+
+			for header, want := range map[string]string{
+				"X-Content-Type-Options": "nosniff",
+				"X-Frame-Options":        "DENY",
+				"Referrer-Policy":        "strict-origin-when-cross-origin",
+			} {
+				if got := rr.Header().Get(header); got != want {
+					t.Errorf("%s = %q, want %q", header, got, want)
+				}
+			}
+
+			csp := rr.Header().Get("Content-Security-Policy")
+			for _, directive := range []string{
+				"default-src 'self'",
+				"frame-ancestors 'none'",
+				"object-src 'none'",
+				"base-uri 'self'",
+			} {
+				if !strings.Contains(csp, directive) {
+					t.Errorf("CSP %q is missing %q", csp, directive)
+				}
+			}
+		})
+	}
+}
+
+func TestSecureHeadersNonceIsPerRequest(t *testing.T) {
+	_, handler := newSecureHeadersApp()
+
+	seen := make(map[string]bool)
+	for range 3 {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+		nonce := cspNonce(t, rr.Header().Get("Content-Security-Policy"))
+		if seen[nonce] {
+			t.Fatalf("nonce %q reused across requests", nonce)
+		}
+		seen[nonce] = true
+	}
+}
+
+func TestHSTSOnlyOverHTTPS(t *testing.T) {
+	// Sent over plain HTTP, HSTS would lock a LAN install out of its own
+	// hostname for a year. Behind a TLS-terminating proxy our leg is cleartext,
+	// so X-Forwarded-Proto is the only signal that the client used HTTPS.
+	tests := []struct {
+		name        string
+		tls         bool
+		forwarded   string
+		wantEnabled bool
+	}{
+		{name: "plain http", wantEnabled: false},
+		{name: "direct tls", tls: true, wantEnabled: true},
+		{name: "proxied https", forwarded: "https", wantEnabled: true},
+		{name: "proxied http", forwarded: "http", wantEnabled: false},
+		{name: "chained proxies", forwarded: "https, http", wantEnabled: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, handler := newSecureHeadersApp()
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tt.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+			if tt.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwarded)
+			}
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			got := rr.Header().Get("Strict-Transport-Security")
+			switch {
+			case tt.wantEnabled && got != "max-age=31536000":
+				t.Errorf("Strict-Transport-Security = %q, want max-age=31536000", got)
+			case !tt.wantEnabled && got != "":
+				t.Errorf("Strict-Transport-Security = %q, want it unset", got)
+			}
+		})
+	}
+}
+
+func TestHSTSDisabledByZeroMaxAge(t *testing.T) {
+	app, _ := newSecureHeadersApp()
+	app.config.hstsMaxAge = 0
+	handler := app.secureHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.TLS = &tls.ConnectionState{}
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q, want it unset", got)
+	}
+}
+
+// cspNonce pulls the nonce out of a script-src directive.
+func cspNonce(t *testing.T, csp string) string {
+	t.Helper()
+
+	_, rest, found := strings.Cut(csp, "'nonce-")
+	if !found {
+		t.Fatalf("no nonce in CSP %q", csp)
+	}
+	nonce, _, _ := strings.Cut(rest, "'")
+	if nonce == "" {
+		t.Fatalf("empty nonce in CSP %q", csp)
+	}
+	return nonce
+}
+
+// TestServeIndexNonceMatchesCSP is the check that keeps the SPA loading: the
+// shell's inline bootstrap scripts only run if they carry the same nonce the
+// header advertises.
+func TestServeIndexNonceMatchesCSP(t *testing.T) {
+	shell := `<!DOCTYPE html><html><head><link rel="stylesheet" href="/assets/root.css"/></head>` +
+		`<body><script>console.log("hi")</script>` +
+		`<script type="module" async="">import "/assets/manifest.js";</script></body></html>`
+	fsys := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte(shell)}}
+
+	app := &application{}
+	handler := app.secureHeaders(app.serveIndex(fsys, "index.html"))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	nonce := cspNonce(t, rr.Header().Get("Content-Security-Policy"))
+	body := rr.Body.String()
+
+	if want := 2; strings.Count(body, `nonce="`+nonce+`"`) != want {
+		t.Errorf("body stamps the nonce %d times, want %d:\n%s", strings.Count(body, `nonce="`+nonce+`"`), want, body)
+	}
+	if strings.Contains(body, "<script>") || strings.Contains(body, "<script type") {
+		t.Errorf("a script tag was left without a nonce:\n%s", body)
+	}
+	// A cached shell would be replayed against a fresh header, and its stale
+	// nonce would get every inline script refused.
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+// TestServeIndexNonceOnRealShell runs the check against the shell that actually
+// ships, so a frontend build that emits inline scripts in a shape addScriptNonce
+// does not recognise fails here rather than in a browser.
+func TestServeIndexNonceOnRealShell(t *testing.T) {
+	distFS, err := fs.Sub(signet.FrontendDist, "frontend/build/client")
+	if err != nil {
+		t.Fatalf("frontend dist: %v", err)
+	}
+	shell, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		t.Skipf("no built frontend to check (run pnpm build): %v", err)
+	}
+
+	app := &application{}
+	handler := app.secureHeaders(app.serveIndex(distFS, "index.html"))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	nonce := cspNonce(t, rr.Header().Get("Content-Security-Policy"))
+	opening := strings.Count(string(shell), "<script")
+	if opening == 0 {
+		t.Fatal("built index.html has no script tags, which cannot be right")
+	}
+	if got := strings.Count(rr.Body.String(), `nonce="`+nonce+`"`); got != opening {
+		t.Errorf("%d of %d script tags carry the nonce", got, opening)
 	}
 }

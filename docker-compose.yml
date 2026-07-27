@@ -56,6 +56,8 @@ services:
       RATE_LIMITER_RPS: ${RATE_LIMITER_RPS:-5}
       RATE_LIMITER_BURST: ${RATE_LIMITER_BURST:-10}
       RATE_LIMITER_ENABLED: ${RATE_LIMITER_ENABLED:-false}
+      # Only sent over HTTPS; 0 disables it.
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
       TLS_IMPERSONATE_ENABLED: ${TLS_IMPERSONATE_ENABLED:-true}
       # Empty unless you enable the solver profile below.
       SOLVER_URL: ${SOLVER_URL:-}

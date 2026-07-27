@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -15,6 +17,71 @@ import (
 	"github.com/flthibaud/signet/internal/validator"
 	"golang.org/x/time/rate"
 )
+
+// contentSecurityPolicy is sent with every response; %s is the per-request
+// script nonce.
+//
+// script-src carries a nonce rather than 'unsafe-inline' because the SPA shell
+// Vite emits bootstraps itself from inline scripts — serveIndex stamps the same
+// nonce on them. style-src keeps 'unsafe-inline' on purpose: the UI styles
+// elements from JavaScript, and locking that down buys little. img-src and
+// media-src stay wide because article content comes from arbitrary sites and is
+// rendered with its original media.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self' 'nonce-%s'; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: https: http:; " +
+	"media-src 'self' https: http:; " +
+	"font-src 'self'; " +
+	"connect-src 'self'; " +
+	"frame-src 'none'; " +
+	"object-src 'none'; " +
+	"base-uri 'self'; " +
+	"form-action 'self'; " +
+	"frame-ancestors 'none'"
+
+// secureHeaders sets the response headers that are the binary's job rather than
+// the reverse proxy's: it serves the SPA itself, so nothing upstream can be
+// assumed to add them.
+func (app *application) secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nonce, err := newNonce()
+		if err != nil {
+			app.serverErrorResponse(w, r, err)
+			return
+		}
+
+		h := w.Header()
+		h.Set("Content-Security-Policy", fmt.Sprintf(contentSecurityPolicy, nonce))
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		if app.config.hstsMaxAge > 0 && requestIsHTTPS(r) {
+			h.Set("Strict-Transport-Security", fmt.Sprintf("max-age=%d", app.config.hstsMaxAge))
+		}
+
+		next.ServeHTTP(w, app.contextSetNonce(r, nonce))
+	})
+}
+
+// newNonce returns a fresh base64 CSP nonce.
+func newNonce() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawStdEncoding.EncodeToString(b), nil
+}
+
+func requestIsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	// Chained proxies append to X-Forwarded-Proto; the client's scheme is first.
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
 
 func (app *application) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,21 +281,29 @@ func (app *application) requireAuthenticatedUser(next http.Handler) http.Handler
 
 func (app *application) serveIndex(fsys fs.FS, path string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f, err := fsys.Open(path)
-		if err != nil {
-			app.serverErrorResponse(w, r, err)
-			return
-		}
-		defer f.Close()
-
-		stat, err := f.Stat()
+		b, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			app.serverErrorResponse(w, r, err)
 			return
 		}
 
-		http.ServeContent(w, r, "index.html", stat.ModTime(), f.(io.ReadSeeker))
+		body := addScriptNonce(b, app.contextGetNonce(r))
+
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(body))
 	})
+}
+
+// addScriptNonce stamps nonce on every <script> tag in the SPA shell. Matching
+// on the two forms a tag can open with (rather than the bare prefix) keeps it
+// off identifiers like <scripting> — the shell is our own build output, so the
+// remaining false-positive would be the literal text "<script" inside a script
+// body.
+func addScriptNonce(html []byte, nonce string) []byte {
+	// Attribute-carrying tags first: stamping the bare form would otherwise
+	// produce a `<script nonce="…">` that the second pass matches again.
+	html = bytes.ReplaceAll(html, []byte("<script "), []byte(`<script nonce="`+nonce+`" `))
+	return bytes.ReplaceAll(html, []byte("<script>"), []byte(`<script nonce="`+nonce+`">`))
 }
 
 func (app *application) requireAuth(next http.Handler) http.HandlerFunc {

@@ -38,7 +38,8 @@ type config struct {
 		workers   int
 		batchSize int
 	}
-	fetch service.FetchConfig
+	hstsMaxAge int
+	fetch      service.FetchConfig
 }
 
 type application struct {
@@ -120,6 +121,19 @@ func main() {
 	cfg.scheduler.batchSize, _ = strconv.Atoi(os.Getenv("SCHEDULER_BATCH_SIZE"))
 	if cfg.scheduler.batchSize == 0 {
 		cfg.scheduler.batchSize = 50
+	}
+
+	// A year, the usual HSTS lifetime. Only ever sent over HTTPS (see
+	// secureHeaders), so a plain-HTTP install ignores it; 0 disables it outright.
+	cfg.hstsMaxAge = 31536000
+	if v := os.Getenv("HSTS_MAX_AGE"); v != "" {
+		cfg.hstsMaxAge, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("invalid HSTS_MAX_AGE: %v", err)
+		}
+		if cfg.hstsMaxAge < 0 {
+			log.Fatalf("invalid HSTS_MAX_AGE: must not be negative, got %d", cfg.hstsMaxAge)
+		}
 	}
 
 	cfg.fetch.TLSImpersonate = true

@@ -15,6 +15,9 @@ type contextKey string
 // in the request context.
 const userContextKey = contextKey("user")
 
+// nonceContextKey holds the per-request CSP nonce set by secureHeaders.
+const nonceContextKey = contextKey("nonce")
+
 // The contextSetUser() method returns a new copy of the request with the provided
 // User struct added to the context. Note that we use our userContextKey constant as the
 // key.
@@ -33,4 +36,20 @@ func (app *application) contextGetUser(r *http.Request) *data.User {
 		panic("missing user value in request context")
 	}
 	return user
+}
+
+func (app *application) contextSetNonce(r *http.Request, nonce string) *http.Request {
+	ctx := context.WithValue(r.Context(), nonceContextKey, nonce)
+	return r.WithContext(ctx)
+}
+
+// contextGetNonce retrieves the CSP nonce advertised to the client. Serving the
+// SPA shell without it would ship HTML whose inline scripts the browser refuses
+// to run, so a missing value is a wiring bug worth panicking over.
+func (app *application) contextGetNonce(r *http.Request) string {
+	nonce, ok := r.Context().Value(nonceContextKey).(string)
+	if !ok {
+		panic("missing nonce value in request context")
+	}
+	return nonce
 }
