@@ -71,12 +71,8 @@ func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (app *application) getCurrentUserHandler(w http.ResponseWriter, r *http.Request) {
+	// requireAuthenticatedUser has already rejected anonymous callers.
 	user := app.contextGetUser(r)
-
-	if user.IsAnonymous() {
-		app.invalidAuthenticationTokenResponse(w, r)
-		return
-	}
 
 	err := app.writeJSON(w, http.StatusOK, envelope{"user": user}, nil)
 	if err != nil {

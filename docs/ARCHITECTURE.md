@@ -145,15 +145,16 @@ L'application suit une architecture en 3 couches :
 
 ### Middleware
 
-Les requêtes passent par 3 middleware dans cet ordre :
+Les requêtes passent par 4 middleware dans cet ordre :
 
 ```go
-recoverPanic → rateLimit → authenticate → handler
+recoverPanic → rateLimit → authenticate → requireAuthenticatedUser → handler
 ```
 
 1. **recoverPanic** : Capture les panics et retourne une erreur 500
 2. **rateLimit** : Limite par IP (configurable RPS + burst)
-3. **authenticate** : Valide le token Bearer, attache l'user au contexte
+3. **authenticate** : Valide le token Bearer ou le cookie `auth_token`, attache l'user au contexte — un token absent ou périmé donne `data.AnonymousUser`, pas un 401 (les pages invité du SPA doivent rester accessibles)
+4. **requireAuthenticatedUser** : Renvoie 401 sur tout `/v1/` pour un user anonyme. Les exceptions sont listées dans `publicAPIRoutes` : `GET /v1/healthcheck`, `GET /v1/readiness`, `POST /v1/users`, `POST` et `DELETE /v1/tokens/authentication` (le logout doit pouvoir expirer un cookie périmé). Une nouvelle route est donc protégée par défaut.
 
 ### Format des réponses
 

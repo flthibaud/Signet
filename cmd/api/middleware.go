@@ -41,14 +41,7 @@ func (app *application) recoverPanic(next http.Handler) http.Handler {
 	})
 }
 
-// rateLimitPrefix scopes rate limiting to the JSON API.
-//
-// The middleware chain wraps every route, but the same binary also serves the
-// embedded SPA, and a cold page load pulls ~20 assets in one burst from a single
-// IP. Limiting those means rate.Limiter.Allow() returning false — an immediate
-// 429, not a delay — so the browser gets a page with missing chunks. The API is
-// what needs protecting; static files do not.
-const rateLimitPrefix = "/v1/"
+const apiPrefix = "/v1/"
 
 func (app *application) rateLimit(next http.Handler) http.Handler {
 	// Define a client struct to hold the rate limiter and last seen time for each
@@ -85,7 +78,7 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 
 	// Importantly, unlock the mutex when the cleanup is complete.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, rateLimitPrefix) {
+		if app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, apiPrefix) {
 			ip, _, err := net.SplitHostPort(r.RemoteAddr)
 			if err != nil {
 				app.serverErrorResponse(w, r, err)
@@ -187,6 +180,34 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		r = app.contextSetUser(r, user)
 
 		// Call the next handler in the chain.
+		next.ServeHTTP(w, r)
+	})
+}
+
+// publicAPIRoutes lists the "method path" pairs under apiPrefix that are
+// reachable without a token. Everything else under the prefix is rejected by
+// requireAuthenticatedUser, so a route added to routes.go is authenticated
+// unless it is deliberately listed here.
+var publicAPIRoutes = map[string]struct{}{
+	http.MethodGet + " /v1/healthcheck":              {},
+	http.MethodGet + " /v1/readiness":                {},
+	http.MethodPost + " /v1/users":                   {},
+	http.MethodPost + " /v1/tokens/authentication":   {},
+	http.MethodDelete + " /v1/tokens/authentication": {},
+}
+
+// requireAuthenticatedUser rejects anonymous requests to the JSON API.
+func (app *application) requireAuthenticatedUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, apiPrefix) {
+			if _, public := publicAPIRoutes[r.Method+" "+r.URL.Path]; !public {
+				if app.contextGetUser(r).IsAnonymous() {
+					app.invalidAuthenticationTokenResponse(w, r)
+					return
+				}
+			}
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }

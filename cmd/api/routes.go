@@ -66,5 +66,5 @@ func (app *application) routes() http.Handler {
 	// Static assets (JS, CSS, images) served without auth checks
 	router.NotFound = fileServer
 
-	return app.recoverPanic(app.rateLimit(app.authenticate(router)))
+	return app.recoverPanic(app.rateLimit(app.authenticate(app.requireAuthenticatedUser(router))))
 }
