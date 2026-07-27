@@ -2,7 +2,6 @@ package data
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"time"
@@ -142,14 +141,16 @@ func (m UserModel) GetByEmail(email string) (*User, error) {
 	return &user, nil
 }
 
-func (m UserModel) GetForToken(tokenScope, tokenPlaintext string) (*User, error) {
-	// Calculate the SHA-256 hash of the plaintext token provided by the client.
-	// Remember that this returns a byte *array* with length 32, not a slice.
-	tokenHash := sha256.Sum256([]byte(tokenPlaintext))
+// GetForToken returns the user a valid token belongs to, along with that
+// token's expiry — the caller needs it to decide whether the session is due to
+// be slid forward, and reading it here keeps that decision free of a second
+// round trip.
+func (m UserModel) GetForToken(tokenScope, tokenPlaintext string) (*User, time.Time, error) {
+	tokenHash := HashTokenPlaintext(tokenPlaintext)
 
 	// Set up the SQL query.
 	query := `
-		SELECT users.id, users.created_at, users.username, users.email, users.password_hash
+		SELECT users.id, users.created_at, users.username, users.email, users.password_hash, tokens.expiry
 		FROM users
 		INNER JOIN tokens
 		ON users.id = tokens.user_id
@@ -157,13 +158,12 @@ func (m UserModel) GetForToken(tokenScope, tokenPlaintext string) (*User, error)
 		AND tokens.scope = $2
 		AND tokens.expiry > $3`
 
-	// Create a slice containing the query arguments. Notice how we use the [:] operator
-	// to get a slice containing the token hash, rather than passing in the array (which
-	// is not supported by the pq driver), and that we pass the current time as the
-	// value to check against the token expiry.
-	args := []any{tokenHash[:], tokenScope, time.Now()}
+	// Pass the current time as the value to check the token expiry against, so an
+	// expired token reads as no user at all.
+	args := []any{tokenHash, tokenScope, time.Now()}
 
 	var user User
+	var expiry time.Time
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -176,17 +176,18 @@ func (m UserModel) GetForToken(tokenScope, tokenPlaintext string) (*User, error)
 		&user.Username,
 		&user.Email,
 		&user.Password.hash,
+		&expiry,
 	)
 	if err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			return nil, ErrRecordNotFound
+			return nil, time.Time{}, ErrRecordNotFound
 		default:
-			return nil, err
+			return nil, time.Time{}, err
 		}
 	}
 
-	return &user, nil
+	return &user, expiry, nil
 }
 
 func (m UserModel) Get(id uuid.UUID) (*User, error) {

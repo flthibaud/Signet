@@ -18,6 +18,12 @@ const userContextKey = contextKey("user")
 // nonceContextKey holds the per-request CSP nonce set by secureHeaders.
 const nonceContextKey = contextKey("nonce")
 
+// tokenHashContextKey holds the hash of the authentication token the request
+// arrived with. It identifies the one session that made this request, which is
+// what logout needs in order to leave the user's other devices alone. The hash
+// travels rather than the plaintext, so the secret stops at the middleware.
+const tokenHashContextKey = contextKey("token_hash")
+
 // The contextSetUser() method returns a new copy of the request with the provided
 // User struct added to the context. Note that we use our userContextKey constant as the
 // key.
@@ -36,6 +42,19 @@ func (app *application) contextGetUser(r *http.Request) *data.User {
 		panic("missing user value in request context")
 	}
 	return user
+}
+
+func (app *application) contextSetTokenHash(r *http.Request, hash []byte) *http.Request {
+	ctx := context.WithValue(r.Context(), tokenHashContextKey, hash)
+	return r.WithContext(ctx)
+}
+
+// contextGetTokenHash returns the hash of the request's authentication token,
+// or nil for an anonymous request. Unlike the user, this is genuinely absent
+// much of the time, so it reports rather than panics.
+func (app *application) contextGetTokenHash(r *http.Request) []byte {
+	hash, _ := r.Context().Value(tokenHashContextKey).([]byte)
+	return hash
 }
 
 func (app *application) contextSetNonce(r *http.Request, nonce string) *http.Request {

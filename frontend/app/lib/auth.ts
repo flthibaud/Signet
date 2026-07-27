@@ -18,9 +18,10 @@ export function useSignIn() {
 }
 
 /**
- * Logs the user out. The backend invalidates every session token and expires
- * the cookie; a full page navigation then clears all client-side state and
- * lets the server redirect to the guest pages.
+ * Logs the user out of this device: the backend invalidates the token this
+ * browser authenticated with — the user's other sessions stay signed in — and
+ * expires the cookie. A full page navigation then clears all client-side state
+ * and lets the server redirect to the guest pages.
  */
 export function useSignOut() {
   return useMutation({

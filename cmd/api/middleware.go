@@ -226,7 +226,7 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		// again calling the invalidAuthenticationTokenResponse() helper if no
 		// matching record was found. IMPORTANT: Notice that we are using
 		// ScopeAuthentication as the first parameter here.
-		user, err := app.models.Users.GetForToken(data.ScopeAuthentication, token)
+		user, expiry, err := app.models.Users.GetForToken(data.ScopeAuthentication, token)
 		if err != nil {
 			switch {
 			case errors.Is(err, data.ErrRecordNotFound):
@@ -243,8 +243,16 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		}
 
 		// Call the contextSetUser() helper to add the user information to the request
-		// context.
+		// context, and carry the token's identity alongside it so logout can end
+		// this session alone.
+		tokenHash := data.HashTokenPlaintext(token)
 		r = app.contextSetUser(r, user)
+		r = app.contextSetTokenHash(r, tokenHash)
+
+		// Slide the expiry forward on an active session. Done before the handler
+		// runs, since a refreshed cookie has to reach the response header before
+		// anything writes a body.
+		app.refreshSession(w, r, tokenHash, expiry, fromCookie)
 
 		// Call the next handler in the chain.
 		next.ServeHTTP(w, r)

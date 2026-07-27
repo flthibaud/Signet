@@ -31,6 +31,11 @@ type Scheduler struct {
 // due in GetFeedsToSync.
 const DefaultSyncInterval = 15 * time.Minute
 
+// tokenCleanupInterval is how often expired tokens are swept. Nothing depends
+// on the timing — expired tokens already authenticate no one — so this only has
+// to be often enough that the table doesn't grow without bound.
+const tokenCleanupInterval = time.Hour
+
 func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
 	if interval <= 0 {
 		interval = DefaultSyncInterval
@@ -72,6 +77,42 @@ func (s *Scheduler) Start() {
 			}
 		}
 	})
+
+	// Housekeeping runs on its own goroutine rather than sharing the feed tick:
+	// the two have nothing to do with each other, and a long sync shouldn't
+	// delay the sweep (or the other way round).
+	s.wg.Go(func() {
+		ticker := time.NewTicker(tokenCleanupInterval)
+		defer ticker.Stop()
+
+		s.purgeExpiredTokens()
+
+		for {
+			select {
+			case <-ticker.C:
+				s.purgeExpiredTokens()
+			case <-s.quit:
+				return
+			}
+		}
+	})
+}
+
+// purgeExpiredTokens drops lapsed authentication and activation tokens. They
+// are already inert — GetForToken filters on expiry — so this is about keeping
+// the table from growing for the life of the install.
+func (s *Scheduler) purgeExpiredTokens() {
+	deleted, err := s.services.models.Tokens.DeleteExpired(s.ctx)
+	if err != nil {
+		s.logger.PrintError(err, map[string]string{"component": "token_cleanup"})
+		return
+	}
+
+	if deleted > 0 {
+		s.logger.PrintInfo("expired tokens deleted", map[string]string{
+			"count": strconv.FormatInt(deleted, 10),
+		})
+	}
 }
 
 func (s *Scheduler) Stop() {

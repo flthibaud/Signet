@@ -39,6 +39,7 @@ type config struct {
 		batchSize int
 	}
 	hstsMaxAge int
+	sessionTTL time.Duration
 	fetch      service.FetchConfig
 }
 
@@ -133,6 +134,21 @@ func main() {
 		}
 		if cfg.hstsMaxAge < 0 {
 			log.Fatalf("invalid HSTS_MAX_AGE: must not be negative, got %d", cfg.hstsMaxAge)
+		}
+	}
+
+	// How long a session survives without being used. The expiry slides forward
+	// while the session is active (see refreshSession), so this is an idle
+	// timeout: thirty days suits an app people open a few times a week, and a
+	// shared machine wants it shorter.
+	cfg.sessionTTL = 30 * 24 * time.Hour
+	if v := os.Getenv("SESSION_TTL"); v != "" {
+		cfg.sessionTTL, err = time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("invalid SESSION_TTL: %v", err)
+		}
+		if cfg.sessionTTL <= 0 {
+			log.Fatalf("invalid SESSION_TTL: must be positive, got %s", v)
 		}
 	}
 

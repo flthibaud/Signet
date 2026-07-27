@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base32"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/flthibaud/signet/internal/validator"
@@ -16,6 +18,20 @@ const (
 	ScopeActivation     = "activation"
 	ScopeAuthentication = "authentication" // Include a new authentication scope.
 )
+
+// tokenEntropyBytes is how much CSPRNG output backs a token: 128 bits, far
+// beyond guessing range for a value that is also rate limited and hashed at
+// rest.
+const tokenEntropyBytes = 16
+
+// tokenEncoding is base32 without padding, so a token is a bare alphanumeric
+// string that survives being pasted into a header or a cookie.
+var tokenEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// tokenPlaintextLength is derived from the encoding rather than written down,
+// so changing tokenEntropyBytes or the encoding can't leave the validator
+// checking a stale literal.
+var tokenPlaintextLength = tokenEncoding.EncodedLen(tokenEntropyBytes)
 
 // Add struct tags to control how the struct appears when encoded to JSON.
 type Token struct {
@@ -36,7 +52,7 @@ func generateToken(userID uuid.UUID, ttl time.Duration, scope string) (*Token, e
 		Scope:  scope,
 	}
 	// Initialize a zero-valued byte slice with a length of 16 bytes.
-	randomBytes := make([]byte, 16)
+	randomBytes := make([]byte, tokenEntropyBytes)
 	// Use the Read() function from the crypto/rand package to fill the byte slice with
 	// random bytes from your operating system's CSPRNG. This will return an error if
 	// the CSPRNG fails to function correctly.
@@ -53,20 +69,27 @@ func generateToken(userID uuid.UUID, ttl time.Duration, scope string) (*Token, e
 	// Note that by default base-32 strings may be padded at the end with the =
 	// character. We don't need this padding character for the purpose of our tokens, so
 	// we use the WithPadding(base32.NoPadding) method in the line below to omit them.
-	token.Plaintext = base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(randomBytes)
-	// Generate a SHA-256 hash of the plaintext token string. This will be the value
-	// that we store in the `hash` field of our database table. Note that the
-	// sha256.Sum256() function returns an *array* of length 32, so to make it easier to
-	// work with we convert it to a slice using the [:] operator before storing it.
-	hash := sha256.Sum256([]byte(token.Plaintext))
-	token.Hash = hash[:]
+	token.Plaintext = tokenEncoding.EncodeToString(randomBytes)
+	// Store only the SHA-256 hash of the plaintext, so a dump of the tokens table
+	// yields nothing that can be replayed.
+	token.Hash = HashTokenPlaintext(token.Plaintext)
 	return token, nil
 }
 
-// Check that the plaintext token has been provided and is exactly 26 bytes long.
+// HashTokenPlaintext returns the value stored in the tokens table for a given
+// plaintext token. Callers that hold a plaintext (the authenticate middleware,
+// GetForToken) go through this rather than hashing inline, so there is one
+// definition of what a token's identity is.
+func HashTokenPlaintext(tokenPlaintext string) []byte {
+	hash := sha256.Sum256([]byte(tokenPlaintext))
+	return hash[:]
+}
+
+// ValidateTokenPlaintext checks the token is present and the right shape before
+// it costs a database round trip.
 func ValidateTokenPlaintext(v *validator.Validator, tokenPlaintext string) {
 	v.Check(tokenPlaintext != "", "token", "must be provided")
-	v.Check(len(tokenPlaintext) == 26, "token", "must be 26 bytes long")
+	v.Check(len(tokenPlaintext) == tokenPlaintextLength, "token", fmt.Sprintf("must be %d characters long", tokenPlaintextLength))
 }
 
 type TokenModel struct {
@@ -99,7 +122,9 @@ func (m TokenModel) Insert(token *Token) error {
 	return err
 }
 
-// DeleteAllForUser() deletes all tokens for a specific user and scope.
+// DeleteAllForUser() deletes all tokens for a specific user and scope. This is
+// the "sign out everywhere" hammer — an ordinary logout uses DeleteByHash so it
+// only ends the session that asked.
 func (m TokenModel) DeleteAllForUser(scope string, userID uuid.UUID) error {
 	query := `
 		DELETE FROM tokens
@@ -110,4 +135,64 @@ func (m TokenModel) DeleteAllForUser(scope string, userID uuid.UUID) error {
 
 	_, err := m.DB.ExecContext(ctx, query, scope, userID)
 	return err
+}
+
+// DeleteByHash deletes a single token, identified by the hash of the plaintext
+// the client presented. Deleting an already-expired or unknown token is not an
+// error: the caller only cares that it is gone afterwards.
+func (m TokenModel) DeleteByHash(scope string, hash []byte) error {
+	query := `
+		DELETE FROM tokens
+		WHERE scope = $1 AND hash = $2`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := m.DB.ExecContext(ctx, query, scope, hash)
+	return err
+}
+
+// Refresh slides a still-valid token's expiry to now+ttl and returns the new
+// expiry. The expiry > now() guard means a token that lapsed between the
+// authentication read and this write stays lapsed rather than being resurrected;
+// that case surfaces as ErrRecordNotFound.
+func (m TokenModel) Refresh(scope string, hash []byte, ttl time.Duration) (time.Time, error) {
+	query := `
+		UPDATE tokens
+		SET expiry = $1
+		WHERE scope = $2 AND hash = $3 AND expiry > $4
+		RETURNING expiry`
+
+	now := time.Now()
+	newExpiry := now.Add(ttl)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var expiry time.Time
+	err := m.DB.QueryRowContext(ctx, query, newExpiry, scope, hash, now).Scan(&expiry)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, ErrRecordNotFound
+		}
+		return time.Time{}, err
+	}
+
+	return expiry, nil
+}
+
+// DeleteExpired removes every lapsed token, whatever the scope, and reports how
+// many went. Nothing else prunes the table: expired rows are ignored by
+// GetForToken but would otherwise accumulate for the life of the install.
+func (m TokenModel) DeleteExpired(ctx context.Context) (int64, error) {
+	query := `
+		DELETE FROM tokens
+		WHERE expiry < now()`
+
+	result, err := m.DB.ExecContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected()
 }

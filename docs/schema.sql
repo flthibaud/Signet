@@ -221,6 +221,7 @@ CREATE INDEX idx_highlights_link ON highlights(link_id);
 
 -- Tokens
 CREATE INDEX idx_tokens_user_scope ON tokens(user_id, scope);
+CREATE INDEX idx_tokens_expiry ON tokens(expiry);
 
 -- ============================================================================
 -- FUNCTIONS

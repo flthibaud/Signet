@@ -267,7 +267,7 @@ La deuxième ligne ne se rouvre jamais : un auto-hébergeur qui autorise son LAN
    │                 │──────────────>│
    │                 │               │
    │                 │ INSERT token  │
-   │                 │ (24h expiry)  │
+   │                 │ (SESSION_TTL) │
    │                 │──────────────>│
    │                 │               │
    │ {token: "xxx"}  │               │
@@ -287,9 +287,22 @@ La deuxième ligne ne se rouvre jamais : un auto-hébergeur qui autorise son LAN
 ### Détails techniques
 
 - **Hachage mot de passe** : bcrypt (cost factor par défaut)
-- **Token** : 26 caractères base32, stocké en SHA256 dans la BDD
-- **Expiration** : 24 heures
-- **Header** : `Authorization: Bearer <token>`
+- **Token** : 16 octets d'entropie encodés en base32 (26 caractères), stocké en SHA256 dans la BDD. La longueur attendue par `ValidateTokenPlaintext` est dérivée de l'encodage, pas écrite en dur.
+- **Header** : `Authorization: Bearer <token>` ou cookie httpOnly `auth_token`
+
+### Durée de vie des sessions
+
+`SESSION_TTL` (30 jours par défaut) est un **délai d'inactivité**, pas une échéance ferme. `authenticate` lit l'expiration du token en même temps que l'user — la requête ne coûte pas d'aller-retour supplémentaire — et `refreshSession` la repousse à `now + SESSION_TTL` dès qu'il reste moins de 90 % de la durée de vie. Une session active coûte donc un `UPDATE` tous les trois jours environ, et n'expire jamais tant qu'elle sert ; une session laissée de côté plus longtemps que le TTL est perdue. Quand le token vient du cookie, celui-ci est réémis avec le nouveau `Max-Age` pour que navigateur et BDD restent d'accord.
+
+Le refresh se fait avant que le handler ne s'exécute : un `Set-Cookie` doit partir avant que quoi que ce soit n'écrive un corps de réponse. Un échec est journalisé puis ignoré — la requête, elle, s'est bien authentifiée. Il ne s'applique qu'aux requêtes sous `/v1/` : `authenticate` couvre aussi les assets statiques du SPA, et accrocher un `Set-Cookie` à une réponse qu'un intermédiaire peut mettre en cache est le meilleur moyen de servir le token d'un user à un autre.
+
+### Déconnexion
+
+`DELETE /v1/tokens/authentication` ne supprime que le token présenté par la requête : `authenticate` dépose son hash dans le contexte (le hash, pas le plaintext, pour que le secret s'arrête au middleware) et le handler fait un `DeleteByHash`. Se déconnecter du téléphone laisse donc le laptop connecté. `Tokens.DeleteAllForUser` reste disponible pour un futur « se déconnecter partout ».
+
+### Nettoyage
+
+Rien d'autre ne purge la table `tokens` : les rangées périmées n'authentifient plus personne mais s'accumuleraient indéfiniment. Le scheduler lance donc, sur sa propre goroutine, un `DELETE ... WHERE expiry < now()` toutes les heures (index `idx_tokens_expiry`), indépendamment du tick de synchro des feeds.
 
 ---
 
