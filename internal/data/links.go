@@ -97,19 +97,26 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 // page exists. It reports no total: count(*) OVER() made every page scan the
 // whole filtered set, which a library of thousands of links pays for on each
 // scroll, and the infinite-scrolling UI only ever needs "is there more".
+//
+// It reads and orders by links.published_at, not the article's own column —
+// that is what the denormalized copy and idx_links_user_published exist for.
+// Sorting on articles.published_at forced a join-then-sort of the whole
+// filtered set on every page, and it made this endpoint disagree with Search
+// (which reads l.published_at) whenever the two columns differ: the article's
+// column is nullable, the link's is NOT NULL and defaults to the save time.
 func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters LinkFilters, limit, offset int) ([]*LinkWithArticle, bool, error) {
 	where, args := buildLinkFiltersWhere(userID, filters)
 
 	query := fmt.Sprintf(`
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.saved_at, l.created_at, l.updated_at,
-			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, a.published_at,
+			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, l.published_at,
 			f.original_title
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
 		LEFT JOIN feeds f ON l.feed_id = f.id
 		WHERE %s
-		ORDER BY a.published_at DESC, l.id DESC
+		ORDER BY l.published_at DESC, l.id DESC
 		LIMIT $%d OFFSET $%d`,
 		strings.Join(where, " AND "), len(args)+1, len(args)+2)
 
@@ -168,7 +175,7 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.saved_at, l.created_at, l.updated_at,
 			a.title, a.author, a.image_url, a.reading_time_minutes,
-			a.text_content, a.published_at,
+			a.text_content, l.published_at,
 			f.original_title
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
@@ -224,13 +231,18 @@ func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64
 
 // BulkInsertForArticle creates links for multiple users in a single query.
 // Uses ON CONFLICT DO NOTHING to skip users who already have this article.
+//
+// published_at is left out on purpose: trigger_set_link_published_at copies it
+// from the article, falling back to saved_at. Spelling the fallback out here
+// meant one subquery per subscriber for the same article id, and it put the
+// definition of the denormalized column in whichever insert path came first.
 func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID, articleID int64, feedID int64, baseSlug string) error {
 	if len(userIDs) == 0 {
 		return nil
 	}
 
 	query := `
-		INSERT INTO links (user_id, article_id, feed_id, slug, published_at, saved_at, updated_at)
+		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
 		VALUES `
 
 	// Each user has its own slug namespace (UNIQUE(user_id, slug)), so every
@@ -243,8 +255,8 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 		}
 		paramBase := i * 4
 		query += fmt.Sprintf(
-			"($%d, $%d, $%d, $%d, (SELECT COALESCE(published_at, NOW()) FROM articles WHERE id = $%d), NOW(), NOW())",
-			paramBase+1, paramBase+2, paramBase+3, paramBase+4, paramBase+2)
+			"($%d, $%d, $%d, $%d, NOW(), NOW())",
+			paramBase+1, paramBase+2, paramBase+3, paramBase+4)
 		args = append(args, uid, articleID, feedID, baseSlug)
 	}
 

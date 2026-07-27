@@ -235,6 +235,36 @@ BEGIN
 END;
 $$ LANGUAGE 'plpgsql';
 
+-- Remplissage de links.published_at, copie dénormalisée de articles.published_at
+-- servant idx_links_user_published. La colonne source est nullable, la copie
+-- NOT NULL : repli sur saved_at.
+CREATE OR REPLACE FUNCTION set_link_published_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.published_at IS NULL THEN
+        SELECT a.published_at INTO NEW.published_at
+        FROM articles a
+        WHERE a.id = NEW.article_id;
+    END IF;
+
+    NEW.published_at := COALESCE(NEW.published_at, NEW.saved_at, NOW());
+
+    RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+-- Maintien de cette copie quand la date de l'article change ou est effacée.
+CREATE OR REPLACE FUNCTION sync_links_published_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE links
+    SET published_at = COALESCE(NEW.published_at, saved_at)
+    WHERE article_id = NEW.id
+      AND published_at IS DISTINCT FROM COALESCE(NEW.published_at, saved_at);
+    RETURN NULL;
+END;
+$$ LANGUAGE 'plpgsql';
+
 -- Fonction de calcul du temps de lecture
 CREATE OR REPLACE FUNCTION calculate_reading_time()
 RETURNS TRIGGER AS $$
@@ -280,6 +310,17 @@ CREATE TRIGGER update_highlights_modtime
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Calcul automatique du temps de lecture
-CREATE TRIGGER trigger_calc_reading_time 
-  BEFORE INSERT OR UPDATE ON articles 
+CREATE TRIGGER trigger_calc_reading_time
+  BEFORE INSERT OR UPDATE ON articles
   FOR EACH ROW EXECUTE FUNCTION calculate_reading_time();
+
+-- Copie dénormalisée de la date de publication sur links
+CREATE TRIGGER trigger_set_link_published_at
+  BEFORE INSERT ON links
+  FOR EACH ROW EXECUTE FUNCTION set_link_published_at();
+
+CREATE TRIGGER trigger_sync_links_published_at
+  AFTER UPDATE OF published_at ON articles
+  FOR EACH ROW
+  WHEN (OLD.published_at IS DISTINCT FROM NEW.published_at)
+  EXECUTE FUNCTION sync_links_published_at();
