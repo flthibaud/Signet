@@ -58,6 +58,8 @@ services:
       RATE_LIMITER_ENABLED: ${RATE_LIMITER_ENABLED:-false}
       # Only sent over HTTPS; 0 disables it.
       HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
+      # Set to true only to subscribe to feeds on your own network.
+      FETCH_ALLOW_PRIVATE_NETWORKS: ${FETCH_ALLOW_PRIVATE_NETWORKS:-false}
       TLS_IMPERSONATE_ENABLED: ${TLS_IMPERSONATE_ENABLED:-true}
       # Empty unless you enable the solver profile below.
       SOLVER_URL: ${SOLVER_URL:-}

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flthibaud/signet/internal/safedial"
 )
 
 // solverClient drives a browser sidecar over the FlareSolverr REST contract
@@ -31,6 +33,12 @@ type solverClient struct {
 	// scheduler worker pool at it just makes every solve time out.
 	sem chan struct{}
 
+	// guard vets the target URL before it is handed to the sidecar. Best-effort
+	// only: the browser resolves DNS itself, in another process, so a rebinding
+	// attack beats this check. Network isolation is the real control — see
+	// docs/ANTIBOT_FETCHING.md.
+	guard *safedial.Guard
+
 	mu        sync.Mutex
 	failures  int
 	downUntil time.Time
@@ -46,14 +54,20 @@ const (
 
 var errSolverUnavailable = errors.New("browser sidecar unavailable")
 
-func newSolverClient(rawURL string, timeout time.Duration) *solverClient {
+func newSolverClient(rawURL string, timeout time.Duration, guard *safedial.Guard) *solverClient {
 	return &solverClient{
 		url:     rawURL,
 		timeout: timeout,
 		// The sidecar needs its full maxTimeout to answer; leave it headroom
 		// before we hang up on it.
+		//
+		// Deliberately unguarded: this client dials the sidecar, whose URL comes
+		// from configuration and normally *is* a private address
+		// (http://solver:8191). The user-supplied URL is the one inside the
+		// payload, and it is vetted in fetch below.
 		client: &http.Client{Timeout: timeout + 30*time.Second},
 		sem:    make(chan struct{}, 1),
+		guard:  guard,
 	}
 }
 
@@ -116,6 +130,16 @@ func (s *solverClient) recordFailure() {
 func (s *solverClient) fetch(ctx context.Context, u *url.URL) (*pageResponse, error) {
 	if !s.available() {
 		return nil, errSolverUnavailable
+	}
+
+	// The sidecar is a browser that will fetch whatever we name, from inside the
+	// deployment's network. It gets no dialer of ours, so this pre-flight is the
+	// only check we can apply — and a rejection here is not a sidecar fault, so
+	// it must not touch the breaker.
+	if s.guard != nil {
+		if err := s.guard.CheckURL(ctx, u); err != nil {
+			return nil, err
+		}
 	}
 
 	// One solve at a time.

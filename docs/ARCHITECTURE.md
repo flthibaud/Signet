@@ -187,6 +187,28 @@ form-action 'self'; frame-ancestors 'none'
 
 `cmd/api/middleware_test.go` vérifie le nonce contre le shell réellement embarqué : un build frontend qui émettrait ses `<script>` sous une forme que `addScriptNonce` ne reconnaît pas échoue en test, pas dans le navigateur.
 
+### Sorties HTTP et SSRF
+
+Le serveur fait des requêtes HTTP vers des URL fournies par les utilisateurs : l'URL du flux à l'abonnement, puis le `<link>` de chaque item du flux au moment du scraping. Sans garde-fou, ces deux chemins transforment l'application en proxy vers son propre réseau — et le second est le pire des deux, puisque le contenu récupéré est stocké dans `articles` et relu par l'attaquant via `GET /v1/links/:slug`. Sur un hébergeur cloud, `http://169.254.169.254/` rend des credentials IAM à qui les demande.
+
+`internal/safedial` pose le contrôle dans `net.Dialer.Control` plutôt que dans un validateur d'URL, parce qu'un validateur ne voit que ce que l'utilisateur a soumis et se fait contourner de deux façons :
+
+- **redirection** — une URL publique répondant `302` vers une adresse interne est suivie par le client HTTP, qui ne repasse pas par la validation ;
+- **DNS rebinding** — un nom que l'attaquant contrôle résout vers une IP publique à la validation et vers `127.0.0.1` à la connexion.
+
+`Control` s'exécute après la résolution DNS, sur l'adresse réellement composée, et à chaque connexion ouverte par la chaîne de redirections. Le hook est installé sur les trois clients Go : le client stdlib (polling RSS, `CreateFromURL`, favicon), le client TLS imperso (scraping) et son fallback.
+
+Deux catégories de plages :
+
+| | Bloqué par défaut | Rouvert par `FETCH_ALLOW_PRIVATE_NETWORKS=true` |
+|---|---|---|
+| RFC1918, CGNAT, ULA, loopback | oui | **oui** |
+| Link-local (`169.254/16`, `fe80::/10`), multicast, réservé, 6to4/NAT64/Teredo | oui | **non** |
+
+La deuxième ligne ne se rouvre jamais : un auto-hébergeur qui autorise son LAN pour s'abonner à un flux interne ne doit pas rouvrir au passage l'endpoint de métadonnées de son hébergeur. Les plages de transition IPv6 y figurent parce qu'elles encapsulent une adresse IPv4 que la pile déballe à l'émission — `2002:a9fe:a9fe::` et `64:ff9b::a9fe:a9fe` atteignent les métadonnées tout en ressemblant à de l'unicast global.
+
+**Le sidecar navigateur est l'angle mort.** C'est un autre processus, qui fait sa propre résolution DNS ; aucun dialer de notre côté ne s'y applique. L'URL cible est vérifiée avant l'envoi (`Guard.CheckURL`), mais ce contrôle est intrinsèquement perdant face au rebinding. La vraie mesure est l'isolation réseau du conteneur — voir `docs/ANTIBOT_FETCHING.md`. Il reste désactivé par défaut.
+
 ### Format des réponses
 
 **Succès** :
@@ -581,6 +603,7 @@ LIMIT 20;
 | `RATE_LIMITER_BURST` | Capacité burst | `4` |
 | `RATE_LIMITER_ENABLED` | Activer le rate limiting | `true` |
 | `HSTS_MAX_AGE` | Durée HSTS en secondes, `0` pour désactiver | `31536000` |
+| `FETCH_ALLOW_PRIVATE_NETWORKS` | Autorise les fetches vers le réseau privé | `false` |
 
 ### Structure application
 

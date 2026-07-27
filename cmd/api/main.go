@@ -152,6 +152,17 @@ func main() {
 	}
 	cfg.fetch.SolverMaxPerFeed, _ = strconv.Atoi(os.Getenv("SOLVER_MAX_PER_FEED"))
 
+	// Off by default: feed and article URLs come from users, so outbound fetches
+	// are only allowed to reach public addresses. Turn it on to subscribe to a
+	// feed on the LAN or in a neighbouring container. Cloud metadata
+	// (169.254.169.254) stays blocked either way.
+	if v := os.Getenv("FETCH_ALLOW_PRIVATE_NETWORKS"); v != "" {
+		cfg.fetch.AllowPrivateNetworks, err = strconv.ParseBool(v)
+		if err != nil {
+			log.Fatalf("invalid FETCH_ALLOW_PRIVATE_NETWORKS: %v", err)
+		}
+	}
+
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL is not set")

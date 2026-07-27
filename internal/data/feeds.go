@@ -90,6 +90,23 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 	return nil
 }
 
+// DeleteIfOrphan removes a feed that no one is subscribed to. It exists to undo
+// a feed created while adding a subscription that then failed to insert:
+// creating the feed requires an HTTP fetch, so the two writes cannot share a
+// transaction and the feed row would otherwise be left behind for good.
+//
+// The NOT EXISTS guard is what makes it safe to call unconditionally — a
+// concurrent subscriber to the same URL keeps the feed.
+func (m FeedModel) DeleteIfOrphan(ctx context.Context, id int64) error {
+	query := `
+		DELETE FROM feeds
+		WHERE id = $1
+		  AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.feed_id = feeds.id)`
+
+	_, err := m.DB.ExecContext(ctx, query, id)
+	return err
+}
+
 func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 	var feed Feed
 

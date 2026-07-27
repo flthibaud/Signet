@@ -19,6 +19,7 @@ import (
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/jsonlog"
 	readabilitymd "github.com/flthibaud/signet/internal/readability"
+	"github.com/flthibaud/signet/internal/safedial"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"
@@ -66,15 +67,29 @@ type FeedService struct {
 	// challengedHosts remembers hosts that answered with an anti-bot challenge,
 	// so their other articles skip straight to the sidecar.
 	challengedHosts sync.Map // map[string]time.Time (expiry)
+
+	// guard vets the address every outbound fetch resolves to. Feed and article
+	// URLs are user-supplied, so without it the service is an SSRF proxy into
+	// the deployment's own network.
+	guard *safedial.Guard
 }
 
 func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig) *FeedService {
 	cfg.setDefaults()
 
-	client := &http.Client{Timeout: scrapeTimeout}
+	guard := safedial.NewGuard(cfg.AllowPrivateNetworks)
+
+	// Every fetch in this service goes through this client or through one of the
+	// two fetchers below, and all three carry the guard's dialer. The one
+	// exception is the solver's own client, which talks to the sidecar rather
+	// than to a user-supplied URL.
+	client := &http.Client{
+		Timeout:   scrapeTimeout,
+		Transport: guard.Transport(scrapeTimeout),
+	}
 	stdlib := &stdlibFetcher{client: client}
 
-	scrape, err := newScrapeFetcher(cfg.TLSImpersonate, scrapeTimeout, stdlib)
+	scrape, err := newScrapeFetcher(cfg.TLSImpersonate, scrapeTimeout, guard, stdlib)
 	if err != nil && logger != nil {
 		logger.PrintError(err, nil)
 	}
@@ -88,10 +103,11 @@ func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig)
 		fetchCfg:     cfg,
 		scrape:       scrape,
 		scrapeStdlib: stdlib,
+		guard:        guard,
 	}
 
 	if cfg.SolverURL != "" {
-		s.solver = newSolverClient(cfg.SolverURL, cfg.SolverTimeout)
+		s.solver = newSolverClient(cfg.SolverURL, cfg.SolverTimeout, guard)
 	}
 
 	return s

@@ -25,6 +25,12 @@ type FetchConfig struct {
 	// a handful of protected articles starves every remaining item — which also
 	// blocks the ETag from advancing and makes the next tick redo everything.
 	SolverMaxPerFeed int
+	// AllowPrivateNetworks lets fetches reach RFC1918/loopback addresses. Off by
+	// default: feed and article URLs come from users, so an unguarded fetch is an
+	// SSRF into whatever the deployment can reach. On for the self-hoster whose
+	// feed lives on the LAN. Cloud metadata stays blocked either way — see
+	// internal/safedial.
+	AllowPrivateNetworks bool
 }
 
 const (

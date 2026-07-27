@@ -56,10 +56,11 @@ Request flow: **React Router SPA → API handlers/middleware → service layer �
 - **Same-origin API**: the frontend calls the API with relative paths (`/v1/...`) and `credentials: "include"`. There is no Vite proxy configured, so API calls work when the frontend is served same-origin by the Go binary; pure `pnpm dev` against a separate backend port would need a proxy or CORS added.
 - **Error envelope**: handlers return errors as `{"error": ...}` — a string for generic errors, or a `{field: message}` map for 422 validation failures. The frontend's `apiFetch` (`frontend/app/lib/api.ts`) normalizes this into an `ApiError`; `applyApiError` maps field errors back onto react-hook-form.
 - **Deduplication**: `articles` are stored once (deduped by content hash); `links` is the per-user join carrying read/favorite/archive state, progress, and a per-user unique slug. Unsubscribing deletes only the subscription, not the user's links.
+- **Outbound fetches are guarded**: feed and article URLs come from users, so every Go HTTP client that fetches one carries `internal/safedial`'s `net.Dialer.Control` hook, which rejects private/link-local addresses after DNS resolution and on every redirect hop. A new outbound client must be built from `Guard.Transport`/`Guard.Dialer` — a URL validator is not a substitute (redirects and DNS rebinding walk straight past one). The browser sidecar is out of reach of this and relies on network isolation. See the *Sorties HTTP et SSRF* section of `docs/ARCHITECTURE.md`.
 - **Logging**: structured JSON via `internal/jsonlog` (`logger.PrintInfo/PrintError/PrintFatal`), not the standard logger.
 
 ## Configuration
 
-Config is read from environment (`.env` auto-loaded). See `.env.example`. Required: `DATABASE_URL`. Others: `PORT`, `ENV`, `AUTO_MIGRATE` (default true), `RATE_LIMITER_{RPS,BURST,ENABLED}`, `SCHEDULER_{INTERVAL,WORKERS,BATCH_SIZE}` (defaults 15m / 5 / 50), `HSTS_MAX_AGE` (default 31536000, 0 disables).
+Config is read from environment (`.env` auto-loaded). See `.env.example`. Required: `DATABASE_URL`. Others: `PORT`, `ENV`, `AUTO_MIGRATE` (default true), `RATE_LIMITER_{RPS,BURST,ENABLED}`, `SCHEDULER_{INTERVAL,WORKERS,BATCH_SIZE}` (defaults 15m / 5 / 50), `HSTS_MAX_AGE` (default 31536000, 0 disables), `FETCH_ALLOW_PRIVATE_NETWORKS` (default false).
 
 A devcontainer (`.devcontainer/`) provides Go, Node/pnpm, and PostgreSQL. Further docs live in `docs/` (`ARCHITECTURE.md`, `RSS_SYNC.md`, `READABILITY_TESTING.md`, `schema.sql`).

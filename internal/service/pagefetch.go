@@ -11,6 +11,7 @@ import (
 	fhttp "github.com/bogdanfinn/fhttp"
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
+	"github.com/flthibaud/signet/internal/safedial"
 )
 
 // maxPageBytes bounds how much of a scraped page we pull into memory. Articles
@@ -141,7 +142,7 @@ type tlsFetcher struct {
 	client tls_client.HttpClient
 }
 
-func newTLSFetcher(timeout time.Duration) (*tlsFetcher, error) {
+func newTLSFetcher(timeout time.Duration, guard *safedial.Guard) (*tlsFetcher, error) {
 	client, err := tls_client.NewHttpClient(
 		tls_client.NewNoopLogger(),
 		tls_client.WithClientProfile(browserProfile),
@@ -149,6 +150,15 @@ func newTLSFetcher(timeout time.Duration) (*tlsFetcher, error) {
 		// A jar lets clearance cookies handed out mid-redirect survive to the
 		// next hop, like a browser's would.
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
+		// tls-client keeps the Control hook when it copies this dialer (it only
+		// overrides Timeout and LocalAddr), so the SSRF guard applies to every
+		// hop this client opens, redirects included. Do not switch to
+		// WithDialContext without reinstating the check there.
+		//
+		// This covers the client's TCP path only. Its HTTP/3 racer dials QUIC
+		// outside the dialer — it is opt-in (WithEnableProtocolRacing) and we
+		// don't enable it; turning it on would need its own guard.
+		tls_client.WithDialer(*guard.Dialer(timeout)),
 	)
 	if err != nil {
 		return nil, err
@@ -223,11 +233,11 @@ func toStdHeader(h fhttp.Header) http.Header {
 // newScrapeFetcher builds the article-scraping transport: impersonated when
 // enabled, stdlib otherwise. It never fails the caller — if the impersonated
 // client can't be built we report the error and let the caller fall back.
-func newScrapeFetcher(impersonate bool, timeout time.Duration, fallback pageFetcher) (pageFetcher, error) {
+func newScrapeFetcher(impersonate bool, timeout time.Duration, guard *safedial.Guard, fallback pageFetcher) (pageFetcher, error) {
 	if !impersonate {
 		return fallback, nil
 	}
-	f, err := newTLSFetcher(timeout)
+	f, err := newTLSFetcher(timeout, guard)
 	if err != nil {
 		return fallback, fmt.Errorf("tls impersonation unavailable, falling back to stdlib: %w", err)
 	}

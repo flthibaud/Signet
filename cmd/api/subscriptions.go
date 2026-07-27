@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/service"
@@ -41,7 +43,32 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// 3. Si feed n'existe pas, le créer
+	// 3. Si feed n'existe pas, le créer. Créer le feed demande un fetch HTTP, il
+	// ne peut donc pas partager une transaction avec l'insert de la souscription
+	// ci-dessous, on retient qu'on l'a créé pour pouvoir le reprendre si la
+	// suite échoue.
+	feedCreated := feed == nil
+	subscribed := false
+
+	// Toute sortie avant l'insert de la souscription laisserait derrière elle un
+	// feed sans abonné, que plus rien ne référence ni ne nettoie. Le garde
+	// NOT EXISTS de DeleteIfOrphan rend l'appel sûr même si un autre utilisateur
+	// vient de s'abonner à la même URL. Contexte détaché : le cas le plus
+	// probable est justement un client parti en cours de route.
+	defer func() {
+		if !feedCreated || subscribed || feed == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		if err := app.models.Feeds.DeleteIfOrphan(ctx, feed.ID); err != nil {
+			app.logger.PrintError(err, map[string]string{
+				"context": "cleaning up orphan feed",
+				"feed_id": strconv.FormatInt(feed.ID, 10),
+			})
+		}
+	}()
+
 	if feed == nil {
 		feed, err = app.services.FeedService.CreateFromURL(r.Context(), input.URL)
 		if err != nil {
@@ -86,6 +113,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		app.serverErrorResponse(w, r, err)
 		return
 	}
+	subscribed = true
 
 	// 6. Import des articles EN BACKGROUND (non-bloquant)
 	go func() {

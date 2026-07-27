@@ -300,8 +300,19 @@ Variables d'environnement (voir `.env.example`) :
 | `SOLVER_URL` | `` | Endpoint REST du sidecar ; vide = escalade navigateur désactivée |
 | `SOLVER_TIMEOUT` | `60s` | Timeout d'un solve navigateur |
 | `SOLVER_MAX_PER_FEED` | `5` | Plafond de solves navigateur par run de feed |
+| `FETCH_ALLOW_PRIVATE_NETWORKS` | `false` | Autorise les fetches vers le réseau privé/loopback |
 
 Le polling RSS n'est jamais concerné : toujours stdlib.
+
+### Isolation réseau du sidecar
+
+Les clients Go passent par `internal/safedial`, qui refuse au niveau du dialer toute connexion vers une adresse privée ou link-local (voir la section « Sorties HTTP et SSRF » de `docs/ARCHITECTURE.md`). **Le sidecar échappe à ce contrôle** : c'est un navigateur dans un autre conteneur, il résout le DNS lui-même. On vérifie l'URL avant de la lui passer, mais cette vérification perd contre le DNS rebinding — le navigateur re-résout après nous.
+
+Si vous activez le profil `solver`, l'isolation réseau est donc la mesure qui compte :
+
+- ne l'exposez sur aucun port de l'hôte (le compose ne publie rien pour lui) ;
+- placez-le sur un réseau compose dédié, sans la base ni les autres services que vous hébergez ;
+- s'il tourne sur une machine ayant accès à un endpoint de métadonnées cloud, considérez que tout site scrapé peut l'atteindre.
 
 ---
 

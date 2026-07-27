@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/flthibaud/signet/internal/safedial"
 )
 
 // fakeFetcher is a pageFetcher returning canned responses, so the escalation
@@ -59,6 +61,11 @@ func newTestService(scrape, stdlib pageFetcher, cfg FetchConfig) *FeedService {
 		scrapeStdlib: stdlib,
 	}
 }
+
+// The solver tests below pass a nil guard on purpose: guarding resolves the
+// target host, and these tests use example.com URLs that would then depend on a
+// working resolver. TestSolverRejectsBlockedTarget covers the guarded path with
+// an IP literal.
 
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
@@ -143,7 +150,7 @@ func TestFetchPageEscalatesToSolver(t *testing.T) {
 
 	scrape := &fakeFetcher{id: "tls", resp: challengePage()}
 	s := newTestService(scrape, scrape, FetchConfig{})
-	s.solver = newSolverClient(sidecar.URL, 5*time.Second)
+	s.solver = newSolverClient(sidecar.URL, 5*time.Second, nil)
 
 	page, err := s.fetchPage(context.Background(), mustURL(t, "https://example.com/a"))
 	if err != nil {
@@ -170,7 +177,7 @@ func TestFetchPageRespectsSolveBudget(t *testing.T) {
 
 	scrape := &fakeFetcher{id: "tls", resp: challengePage()}
 	s := newTestService(scrape, scrape, FetchConfig{SolverMaxPerFeed: 1})
-	s.solver = newSolverClient(sidecar.URL, 5*time.Second)
+	s.solver = newSolverClient(sidecar.URL, 5*time.Second, nil)
 
 	ctx := withSolveBudget(context.Background(), s.fetchCfg.SolverMaxPerFeed)
 
@@ -196,7 +203,7 @@ func TestSolverBreakerOpensAfterRepeatedFailures(t *testing.T) {
 	}))
 	defer sidecar.Close()
 
-	solver := newSolverClient(sidecar.URL, time.Second)
+	solver := newSolverClient(sidecar.URL, time.Second, nil)
 	u := mustURL(t, "https://example.com/a")
 
 	for range solverFailureThreshold {
@@ -289,7 +296,7 @@ func TestSolverRequestCarriesBothTimeoutForms(t *testing.T) {
 	}))
 	defer sidecar.Close()
 
-	solver := newSolverClient(sidecar.URL, 45*time.Second)
+	solver := newSolverClient(sidecar.URL, 45*time.Second, nil)
 	if _, err := solver.fetch(context.Background(), mustURL(t, "https://example.com/a")); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -313,8 +320,35 @@ func TestSolverRejectsNonHTMLSolution(t *testing.T) {
 	}))
 	defer sidecar.Close()
 
-	solver := newSolverClient(sidecar.URL, 5*time.Second)
+	solver := newSolverClient(sidecar.URL, 5*time.Second, nil)
 	if _, err := solver.fetch(context.Background(), mustURL(t, "https://example.com/a.pdf")); err == nil {
 		t.Fatal("expected a PDF solution to be rejected")
+	}
+}
+
+// The sidecar runs a browser inside the deployment's network, so the URL we ask
+// it to load is vetted before the request leaves. An IP literal keeps this test
+// off the resolver.
+func TestSolverRejectsBlockedTarget(t *testing.T) {
+	var calls atomic.Int32
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Write([]byte(`{"status":"ok","solution":{"status":200,"response":"<html><body>metadata</body></html>"}}`))
+	}))
+	defer sidecar.Close()
+
+	solver := newSolverClient(sidecar.URL, 5*time.Second, safedial.NewGuard(false))
+
+	_, err := solver.fetch(context.Background(), mustURL(t, "http://169.254.169.254/latest/meta-data/"))
+	if !errors.Is(err, safedial.ErrBlocked) {
+		t.Fatalf("err = %v, want safedial.ErrBlocked", err)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("sidecar called %d times, want 0 — the URL never should have left", calls.Load())
+	}
+	// A policy rejection is not the sidecar misbehaving; tripping the breaker on
+	// it would take the solver out for every other article.
+	if !solver.available() {
+		t.Error("breaker opened on a guard rejection")
 	}
 }
