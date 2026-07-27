@@ -104,7 +104,7 @@ func TestFetchFaviconURLBlocksInternalAddress(t *testing.T) {
 
 	// A blocked fetch falls back to the conventional /favicon.ico guess, which
 	// is a string the caller stores but never dereferences server-side.
-	got := fetchFaviconURL(s.client, internal.URL)
+	got := fetchFaviconURL(context.Background(), s.client, internal.URL)
 	if hits.Load() != 0 {
 		t.Errorf("internal server received %d requests, want 0", hits.Load())
 	}
