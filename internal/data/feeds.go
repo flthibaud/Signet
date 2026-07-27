@@ -17,10 +17,10 @@ type Feed struct {
 	LastFetchedAt time.Time `json:"last_fetched_at"`
 	CreatedAt     time.Time `json:"created_at"`
 
-	HttpEtag             string     `json:"-"`
-	HttpLastModified     string     `json:"-"`
-	FetchingSince        *time.Time `json:"-"`
-	ConsecutiveFailures  int        `json:"-"`
+	HttpEtag            string     `json:"-"`
+	HttpLastModified    string     `json:"-"`
+	FetchingSince       *time.Time `json:"-"`
+	ConsecutiveFailures int        `json:"-"`
 }
 
 type FeedModel struct {
@@ -57,7 +57,10 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 	query := `
 		INSERT INTO feeds (url, original_title, site_url, image_url, last_fetched_at, is_active, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id`
+		ON CONFLICT (url) DO UPDATE SET url = feeds.url
+		RETURNING id, COALESCE(original_title, ''), COALESCE(site_url, ''), COALESCE(image_url, ''),
+		          COALESCE(last_fetched_at, $5), COALESCE(is_active, $6), COALESCE(created_at, $7),
+		          http_etag, http_last_modified`
 
 	err := m.DB.QueryRowContext(ctx,
 		query,
@@ -68,7 +71,17 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 		feed.LastFetchedAt,
 		feed.IsActive,
 		feed.CreatedAt,
-	).Scan(&feed.ID)
+	).Scan(
+		&feed.ID,
+		&feed.Title,
+		&feed.SiteUrl,
+		&feed.ImageUrl,
+		&feed.LastFetchedAt,
+		&feed.IsActive,
+		&feed.CreatedAt,
+		&feed.HttpEtag,
+		&feed.HttpLastModified,
+	)
 
 	if err != nil {
 		return err
