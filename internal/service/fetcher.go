@@ -3,8 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -246,10 +244,13 @@ func plainText(s string) string {
 	return strings.TrimSpace(html.UnescapeString(stripped))
 }
 
-// createArticleFromItem crée un article depuis un RSS item. `language` est une
-// configuration de recherche PostgreSQL déjà résolue, pas un tag de langue brut.
-func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash, language string) (*data.Article, error) {
-	parsed, err := s.fetchWithReadability(ctx, item.Link)
+// createArticleFromItem crée un article depuis un RSS item. `link` est l'URL
+// retenue pour l'item (voir itemURL) et `hash` sa clé de déduplication ; on
+// stocke le lien tel quel, la normalisation ne servant qu'au hash. `language`
+// est une configuration de recherche PostgreSQL déjà résolue, pas un tag de
+// langue brut.
+func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, link, hash, language string) (*data.Article, error) {
+	parsed, err := s.fetchWithReadability(ctx, link)
 
 	var title, originalHTML, textContent string
 
@@ -268,7 +269,7 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 
 	// Crée l'article
 	article := &data.Article{
-		Url:          item.Link,
+		Url:          link,
 		Hash:         hash,
 		Title:        title,
 		Description:  plainText(item.Description),
@@ -380,7 +381,12 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 			break
 		}
 
-		hash := hashURL(item.Link)
+		link := itemURL(item.Link, item.GUID)
+		if link == "" {
+			continue
+		}
+
+		hash := hashURL(link)
 
 		// Check if article already exists
 		article, err := s.models.Articles.GetByHash(ctx, hash)
@@ -391,7 +397,7 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 
 		// Create article if new
 		if article == nil {
-			article, err = s.createArticleFromItem(ctx, item, hash, feedLanguage)
+			article, err = s.createArticleFromItem(ctx, item, link, hash, feedLanguage)
 			if err != nil {
 				itemsFailed = true
 				continue
@@ -499,13 +505,6 @@ func (s *FeedService) scrapeLimiter(domain string) *rate.Limiter {
 	limiter := rate.NewLimiter(rate.Every(time.Second), 1)
 	actual, _ := s.scrapeLimiters.LoadOrStore(domain, limiter)
 	return actual.(*rate.Limiter)
-}
-
-// hashURL calcule le hash SHA256 d'une URL
-func hashURL(url string) string {
-	h := sha256.New()
-	h.Write([]byte(url))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func getFeedImageURL(feed *gofeed.Feed) string {

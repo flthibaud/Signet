@@ -514,8 +514,13 @@ User                API                    FeedService              DB
 Pour chaque `<item>` du flux RSS :
 
 ```go
-// 1. Calculer le hash de l'URL
-hash := sha256(item.Link)
+// 1. Résoudre le lien de l'item (fallback <guid> permalien) puis le hasher
+//    sous sa forme normalisée
+link := itemURL(item.Link, item.GUID)
+if link == "" {
+    continue // rien à dédupliquer ni à scraper
+}
+hash := sha256(normalizeURL(link))
 
 // 2. Vérifier si l'article existe
 article, err := models.Articles.GetByHash(ctx, hash)
@@ -551,7 +556,7 @@ if !linkExists(userID, article.ID) {
 | Niveau | Table | Contrainte | Effet |
 |--------|-------|------------|-------|
 | 1 | `feeds` | `UNIQUE(url)` | 1 flux RSS par URL |
-| 2 | `articles` | `UNIQUE(hash)` | 1 article par URL (hash SHA256) |
+| 2 | `articles` | `UNIQUE(hash)` | 1 article par URL (hash SHA256 de l'URL normalisée) |
 | 3 | `links` | `UNIQUE(user_id, article_id)` | 1 sauvegarde par user+article |
 | 4 | `subscriptions` | `UNIQUE(user_id, feed_id)` | 1 abonnement par user+feed |
 
@@ -568,6 +573,18 @@ Bob sauve https://blog.com/article-x
 
 Économie : 1 article en BDD au lieu de 2
 ```
+
+### Normalisation de l'URL
+
+Le hash porte sur une forme canonique de l'URL, pas sur la chaîne brute (`normalizeURL`, `internal/service/urlhash.go`). Deux flux qui pointent la même page l'épellent rarement pareil, et sans normalisation `http://` vs `https://`, un `www.`, un slash final, un `#ancre`, un `?utm_source=…` ou un simple ordre de paramètres différent suffisent à créer deux articles — le stockage unique promis ne tient alors plus entre flux.
+
+Sont donc ramenés à une forme unique : le schéma (`http` est replié sur `https`, les deux servant en pratique le même document), la casse du host, le `www.`, les ports par défaut, le fragment, les identifiants d'URL, le slash final, l'ordre des paramètres, et les paramètres de campagne (`utm_*`, `pk_*`, `fbclid`, `gclid`…). Le reste de la query est **conservé** : beaucoup de sites adressent encore leur contenu par paramètre (`?p=42`), et fusionner deux articles distincts est bien pire que rater une déduplication. Une URL relative, malformée ou non-HTTP est laissée telle quelle : aucune forme canonique n'est fiable dans ce cas.
+
+Le résultat sert uniquement de clé : c'est le lien d'origine qui est stocké dans `articles.url` et scrapé.
+
+Enfin, un item sans lien exploitable est ignoré. Un `<link>` vide hashait la chaîne vide, donc *tous* les items sans lien, tous flux confondus, fusionnaient en un seul article. `itemURL` retombe d'abord sur le `<guid>` quand celui-ci est une URL HTTP absolue (le cas `isPermaLink="true"`), et l'item est sauté sinon — sans marquer le flux en échec, puisqu'un retry échouerait à l'identique et bloquerait l'ETag.
+
+> **Migration** : le hash étant calculé différemment, les articles déjà en base ne sont plus retrouvés. Les items encore dans la fenêtre du flux au moment de la mise à jour sont ré-importés une fois sous un nouveau hash (doublon ponctuel pour les abonnés) ; l'ancienne ligne reste et le régime permanent est correct ensuite.
 
 ---
 
