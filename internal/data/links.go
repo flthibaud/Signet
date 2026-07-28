@@ -11,22 +11,27 @@ import (
 	"github.com/google/uuid"
 )
 
+// Link is a user's saved copy of an article. ArchivedAt is a pointer because
+// links.archived_at is nullable and "not archived" has to serialize as null —
+// a zero time.Time would send back "0001-01-01T00:00:00Z" instead.
+//
+// ReadingProgressAnchorIndex uses the same JSON name as the PATCH body field
+// that writes it, so a client can round-trip what it sent.
 type Link struct {
-	ID                                int64     `json:"id"`
-	UserID                            uuid.UUID `json:"-"`
-	ArticleID                         int64     `json:"-"`
-	Slug                              string    `json:"slug"`
-	ArticleHash                       string    `json:"-"`
-	ArticleUrl                        string    `json:"article_url"`
-	IsRead                            bool      `json:"is_read"`
-	IsStarred                         bool      `json:"is_starred"`
-	ReadingProgress                   float64   `json:"reading_progress"`
-	ArticleReadingProgressAnchorIndex int       `json:"article_reading_progress_anchor_index"`
-	FeedID                            *int64    `json:"feed_id"`
-	CreatedAt                         time.Time `json:"created_at"`
-	SavedAt                           time.Time `json:"saved_at"`
-	ArchivedAt                        time.Time `json:"archived_at"`
-	UpdatedAt                         time.Time `json:"updated_at"`
+	ID                         int64      `json:"id"`
+	UserID                     uuid.UUID  `json:"-"`
+	ArticleID                  int64      `json:"-"`
+	Slug                       string     `json:"slug"`
+	ArticleUrl                 string     `json:"article_url"`
+	IsRead                     bool       `json:"is_read"`
+	IsStarred                  bool       `json:"is_starred"`
+	ReadingProgress            float64    `json:"reading_progress"`
+	ReadingProgressAnchorIndex int        `json:"reading_progress_anchor_index"`
+	FeedID                     *int64     `json:"feed_id"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	SavedAt                    time.Time  `json:"saved_at"`
+	ArchivedAt                 *time.Time `json:"archived_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
 }
 
 // LinkWithArticle combines a user's link state with the article content.
@@ -109,7 +114,9 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 
 	query := fmt.Sprintf(`
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
-			l.saved_at, l.created_at, l.updated_at,
+			l.reading_progress_anchor_index,
+			l.saved_at, l.created_at, l.updated_at, l.archived_at,
+			a.url,
 			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, l.published_at,
 			f.original_title
 		FROM links l
@@ -140,9 +147,12 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 			&link.IsRead,
 			&link.IsStarred,
 			&link.ReadingProgress,
+			&link.ReadingProgressAnchorIndex,
 			&link.SavedAt,
 			&link.CreatedAt,
 			&link.UpdatedAt,
+			&link.ArchivedAt,
+			&link.ArticleUrl,
 			&link.Title,
 			&link.Description,
 			&link.Author,
@@ -173,7 +183,9 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID) (*LinkDetail, error) {
 	query := `
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
-			l.saved_at, l.created_at, l.updated_at,
+			l.reading_progress_anchor_index,
+			l.saved_at, l.created_at, l.updated_at, l.archived_at,
+			a.url,
 			a.title, a.author, a.image_url, a.reading_time_minutes,
 			a.text_content, l.published_at,
 			f.original_title
@@ -191,9 +203,12 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 		&link.IsRead,
 		&link.IsStarred,
 		&link.ReadingProgress,
+		&link.ReadingProgressAnchorIndex,
 		&link.SavedAt,
 		&link.CreatedAt,
 		&link.UpdatedAt,
+		&link.ArchivedAt,
+		&link.ArticleUrl,
 		&link.Title,
 		&link.Author,
 		&link.ImageURL,
