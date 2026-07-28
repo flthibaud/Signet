@@ -38,11 +38,15 @@ func readLanguageTag(r *http.Request) string {
 // searchHandler runs a full-text search over the authenticated user's library.
 func (app *application) searchHandler(w http.ResponseWriter, r *http.Request) {
 	user := app.contextGetUser(r)
-	p := app.readPagination(r)
+
+	p, err := app.readPagination(r)
+	if err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
 
 	qs := r.URL.Query()
 	var filters data.SearchFilters
-	var err error
 
 	filters.Query = strings.TrimSpace(qs.Get("q"))
 	filters.Language = data.ResolveTextSearchConfig(readLanguageTag(r))

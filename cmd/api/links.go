@@ -10,11 +10,15 @@ import (
 
 func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request) {
 	user := app.contextGetUser(r)
-	p := app.readPagination(r)
+
+	p, err := app.readPagination(r)
+	if err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
 
 	qs := r.URL.Query()
 	var filters data.LinkFilters
-	var err error
 
 	if filters.IsRead, err = readOptionalBool(qs, "is_read"); err != nil {
 		app.badRequestResponse(w, r, err)

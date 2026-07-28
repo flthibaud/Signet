@@ -32,25 +32,48 @@ func (p Pagination) Offset() int {
 	return (p.Page - 1) * p.PageSize
 }
 
-// readPagination extracts page and page_size from query params with defaults and bounds.
-func (app *application) readPagination(r *http.Request) Pagination {
+const (
+	defaultPageSize = 20
+	maxPageSize     = 100
+
+	// maxOffset caps how deep a client may paginate. The list and search
+	// queries end in `ORDER BY ... LIMIT n OFFSET m`, which Postgres answers by
+	// walking and discarding the first m rows — cost grows with the offset, and
+	// nothing beyond a few hundred pages is a real user scrolling.
+	maxOffset = 10_000
+)
+
+// readPagination extracts page and page_size from query params with defaults
+// and bounds. Like the readOptional* helpers, it rejects values it cannot use
+// rather than silently falling back to the default.
+func (app *application) readPagination(r *http.Request) (Pagination, error) {
 	qs := r.URL.Query()
 
 	page := 1
 	if v := qs.Get("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			page = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return Pagination{}, errors.New("invalid page parameter: must be a positive integer")
 		}
+		page = n
 	}
 
-	pageSize := 20
+	pageSize := defaultPageSize
 	if v := qs.Get("page_size"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-			pageSize = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxPageSize {
+			return Pagination{}, fmt.Errorf("invalid page_size parameter: must be between 1 and %d", maxPageSize)
 		}
+		pageSize = n
 	}
 
-	return Pagination{Page: page, PageSize: pageSize}
+	// Division rather than (page-1)*pageSize so an in-range page that would
+	// overflow the multiplication is still caught here.
+	if page-1 > maxOffset/pageSize {
+		return Pagination{}, fmt.Errorf("invalid page parameter: must not skip more than %d records; narrow the query or raise page_size", maxOffset)
+	}
+
+	return Pagination{Page: page, PageSize: pageSize}, nil
 }
 
 // readOptionalBool parses an optional boolean query parameter. It returns nil
