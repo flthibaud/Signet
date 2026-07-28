@@ -7,10 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-func boolPtr(b bool) *bool       { return &b }
-func int64Ptr(n int64) *int64    { return &n }
+func boolPtr(b bool) *bool        { return &b }
+func int64Ptr(n int64) *int64     { return &n }
 func floatPtr(f float64) *float64 { return &f }
-func intPtr(n int) *int          { return &n }
+func intPtr(n int) *int           { return &n }
 
 func TestBuildLinkFiltersWhere(t *testing.T) {
 	userID := uuid.New()

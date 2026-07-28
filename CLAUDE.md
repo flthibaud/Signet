@@ -18,6 +18,7 @@ go test ./...             # All Go tests
 go test ./internal/data   # Single package
 go vet ./...
 ```
+`internal/data` has database-backed tests (`testdb_test.go` holds the fixtures, `*_db_test.go` the tests) covering the parts of the read paths that are pure SQL — that a query names real columns, and that its SELECT list lines up with its `Scan`. They run against `TEST_DATABASE_URL`, falling back to `DATABASE_URL`, and **skip** when neither is set, so `go test ./...` still passes with no database. The fixtures only insert rows they own and delete them on cleanup; nothing truncates a table. Any new query in that package wants a test there — a declared-but-unscanned struct field is invisible to both the compiler and to tests that only assert on SQL strings.
 
 ### Frontend (in `frontend/`, pnpm)
 ```bash

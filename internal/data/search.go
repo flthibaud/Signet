@@ -31,23 +31,21 @@ const (
 		", MaxWords=32, MinWords=12, MaxFragments=1, FragmentDelimiter= … "
 )
 
-// SearchResult is one hit in a user's library: their per-user link state plus
-// the article metadata needed to render a result row.
 type SearchResult struct {
-	ID          int64     `json:"id"`
-	Slug        string    `json:"slug"`
-	Title       string    `json:"title"`
-	Snippet     string    `json:"snippet"`
-	ImageURL    string    `json:"image_url,omitempty"`
-	FeedID      *int64    `json:"feed_id"`
-	FeedTitle   *string   `json:"feed_title,omitempty"`
-	ReadingTime float64   `json:"reading_time_minutes"`
-	IsRead      bool      `json:"is_read"`
-	IsStarred   bool      `json:"is_starred"`
-	IsArchived  bool      `json:"is_archived"`
-	SavedAt     time.Time `json:"saved_at"`
-	PublishedAt time.Time `json:"published_at"`
-	Rank        float64   `json:"rank"`
+	ID          int64      `json:"id"`
+	Slug        string     `json:"slug"`
+	Title       string     `json:"title"`
+	Snippet     string     `json:"snippet"`
+	ImageURL    string     `json:"image_url,omitempty"`
+	FeedID      *int64     `json:"feed_id"`
+	FeedTitle   *string    `json:"feed_title,omitempty"`
+	ReadingTime float64    `json:"reading_time_minutes"`
+	IsRead      bool       `json:"is_read"`
+	IsStarred   bool       `json:"is_starred"`
+	ArchivedAt  *time.Time `json:"archived_at"`
+	SavedAt     time.Time  `json:"saved_at"`
+	PublishedAt time.Time  `json:"published_at"`
+	Rank        float64    `json:"rank"`
 }
 
 // SearchFilters describes a library search. An empty Query is valid and means
@@ -130,7 +128,7 @@ func (m LinkModel) Search(ctx context.Context, userID uuid.UUID, filters SearchF
 		// comes straight off idx_links_user_published and PostgreSQL can stop as
 		// soon as it has a page.
 		query = fmt.Sprintf(`
-			SELECT l.id, l.slug, l.feed_id, l.is_read, l.is_starred, l.archived_at IS NOT NULL,
+			SELECT l.id, l.slug, l.feed_id, l.is_read, l.is_starred, l.archived_at,
 				l.saved_at,
 				a.title,
 				COALESCE(NULLIF(a.image_url, ''), f.image_url, '') AS image_url,
@@ -180,7 +178,7 @@ func (m LinkModel) Search(ctx context.Context, userID uuid.UUID, filters SearchF
 				ORDER BY l.published_at DESC, l.id DESC
 				LIMIT %d
 			)
-			SELECT c.id, c.slug, c.feed_id, c.is_read, c.is_starred, c.archived_at IS NOT NULL,
+			SELECT c.id, c.slug, c.feed_id, c.is_read, c.is_starred, c.archived_at,
 				c.saved_at,
 				a.title,
 				COALESCE(NULLIF(a.image_url, ''), f.image_url, '') AS image_url,
@@ -218,7 +216,7 @@ func (m LinkModel) Search(ctx context.Context, userID uuid.UUID, filters SearchF
 			&r.FeedID,
 			&r.IsRead,
 			&r.IsStarred,
-			&r.IsArchived,
+			&r.ArchivedAt,
 			&r.SavedAt,
 			&r.Title,
 			&r.ImageURL,

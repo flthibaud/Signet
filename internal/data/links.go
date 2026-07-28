@@ -99,16 +99,7 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 }
 
 // ListForUser returns one page of the user's links, plus whether a further
-// page exists. It reports no total: count(*) OVER() made every page scan the
-// whole filtered set, which a library of thousands of links pays for on each
-// scroll, and the infinite-scrolling UI only ever needs "is there more".
-//
-// It reads and orders by links.published_at, not the article's own column —
-// that is what the denormalized copy and idx_links_user_published exist for.
-// Sorting on articles.published_at forced a join-then-sort of the whole
-// filtered set on every page, and it made this endpoint disagree with Search
-// (which reads l.published_at) whenever the two columns differ: the article's
-// column is nullable, the link's is NOT NULL and defaults to the save time.
+// page exists.
 func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters LinkFilters, limit, offset int) ([]*LinkWithArticle, bool, error) {
 	where, args := buildLinkFiltersWhere(userID, filters)
 
@@ -117,7 +108,9 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 			l.reading_progress_anchor_index,
 			l.saved_at, l.created_at, l.updated_at, l.archived_at,
 			a.url,
-			a.title, a.description, a.author, COALESCE(NULLIF(a.image_url, ''), f.image_url) AS image_url, a.reading_time_minutes, l.published_at,
+			a.title, COALESCE(a.description, ''), COALESCE(a.author, ''),
+			COALESCE(NULLIF(a.image_url, ''), f.image_url, '') AS image_url,
+			a.reading_time_minutes, l.published_at,
 			f.original_title
 		FROM links l
 		JOIN articles a ON l.article_id = a.id
@@ -180,13 +173,16 @@ func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters Li
 	return links, hasMore, nil
 }
 
+// GetBySlug returns one of the user's links, article body included.
 func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID) (*LinkDetail, error) {
 	query := `
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.reading_progress_anchor_index,
 			l.saved_at, l.created_at, l.updated_at, l.archived_at,
 			a.url,
-			a.title, a.author, a.image_url, a.reading_time_minutes,
+			a.title, COALESCE(a.author, ''),
+			COALESCE(NULLIF(a.image_url, ''), f.image_url, '') AS image_url,
+			a.reading_time_minutes,
 			a.text_content, l.published_at,
 			f.original_title
 		FROM links l
@@ -246,11 +242,6 @@ func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64
 
 // BulkInsertForArticle creates links for multiple users in a single query.
 // Uses ON CONFLICT DO NOTHING to skip users who already have this article.
-//
-// published_at is left out on purpose: trigger_set_link_published_at copies it
-// from the article, falling back to saved_at. Spelling the fallback out here
-// meant one subquery per subscriber for the same article id, and it put the
-// definition of the denormalized column in whichever insert path came first.
 func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID, articleID int64, feedID int64, baseSlug string) error {
 	if len(userIDs) == 0 {
 		return nil
@@ -261,8 +252,7 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 		VALUES `
 
 	// Each user has its own slug namespace (UNIQUE(user_id, slug)), so every
-	// subscriber gets the same baseSlug. The previous per-position "-i" suffix
-	// produced non-deterministic, ugly slugs (subscriber order isn't stable).
+	// subscriber gets the same baseSlug.
 	args := []any{}
 	for i, uid := range userIDs {
 		if i > 0 {
@@ -281,8 +271,6 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 	return err
 }
 
-// LinkUpdate describes a partial update of a link's per-user state.
-// Nil fields are left unchanged. Archived toggles archived_at (NOW() / NULL).
 type LinkUpdate struct {
 	IsRead                     *bool
 	IsStarred                  *bool
