@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -197,6 +198,17 @@ func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 		if cancelledByShutdown(ctx, err) {
 			s.logger.PrintInfo("feed sync cancelled at shutdown", map[string]string{
 				"feed_id": strconv.FormatInt(job.feed.ID, 10),
+			})
+			return
+		}
+
+		var fetchErr *FeedFetchError
+		if errors.As(err, &fetchErr) {
+			s.logger.PrintInfo("feed sync failed", map[string]string{
+				"feed_id":  strconv.FormatInt(job.feed.ID, 10),
+				"url":      job.feed.Url,
+				"reason":   fetchErr.Error(),
+				"failures": strconv.Itoa(fetchErr.Failures),
 			})
 			return
 		}

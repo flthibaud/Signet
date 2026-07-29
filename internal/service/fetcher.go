@@ -429,6 +429,17 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, newEtag, newLastModified)
 }
 
+// feedFailureThreshold is how many consecutive failures turn a feed off.
+const feedFailureThreshold = 10
+
+type FeedFetchError struct {
+	Failures int
+	Err      error
+}
+
+func (e *FeedFetchError) Error() string { return e.Err.Error() }
+func (e *FeedFetchError) Unwrap() error { return e.Err }
+
 // markFailed records a feed failure (clearing the lock, incrementing the
 // counter, deactivating after the threshold) and returns an error mentioning
 // the deactivation so the caller logs it. The DB write uses a detached context
@@ -441,10 +452,10 @@ func (s *FeedService) markFailed(ctx context.Context, feedID int64, cause error)
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("marking feed %d failed: %w", feedID, err))
 	}
-	if failures >= 10 {
+	if failures >= feedFailureThreshold {
 		return fmt.Errorf("feed %d deactivated after %d consecutive failures: %w", feedID, failures, cause)
 	}
-	return cause
+	return &FeedFetchError{Failures: failures, Err: cause}
 }
 
 // estimateReadingTime returns an estimated reading time in minutes from the

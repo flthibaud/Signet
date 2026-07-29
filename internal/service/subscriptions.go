@@ -166,6 +166,18 @@ func (s *SubscriptionService) importAsync(feed *data.Feed) {
 			return
 		}
 
+		// Same rule as the scheduler: a feed the far end would not serve is not
+		// this program failing.
+		var fetchErr *FeedFetchError
+		if errors.As(err, &fetchErr) {
+			s.logger.PrintInfo("article import failed", map[string]string{
+				"feed_id":  strconv.FormatInt(feed.ID, 10),
+				"reason":   fetchErr.Error(),
+				"failures": strconv.Itoa(fetchErr.Failures),
+			})
+			return
+		}
+
 		s.logger.PrintError(err, map[string]string{
 			"context": "importing articles for new subscription",
 			"feed_id": strconv.FormatInt(feed.ID, 10),
