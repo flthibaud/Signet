@@ -10,6 +10,7 @@ import (
 type Services struct {
 	FeedService         *FeedService
 	SubscriptionService *SubscriptionService
+	OPMLService         *OPMLService
 
 	// models is kept for the housekeeping the scheduler does outside any one
 	// service — pruning expired tokens, for instance.
@@ -22,10 +23,13 @@ func NewServices(models data.Models, logger *jsonlog.Logger, fetchCfg FetchConfi
 	// SubscriptionService s'appuie sur FeedService pour créer un feed et en
 	// importer les articles, d'où l'ordre.
 	feedService := NewFeedService(models, logger, fetchCfg)
+	subscriptionService := NewSubscriptionService(models, feedService, logger)
+	opmlService := NewOPMLService(models, subscriptionService, logger)
 
 	return Services{
 		FeedService:         feedService,
-		SubscriptionService: NewSubscriptionService(models, feedService, logger),
+		SubscriptionService: subscriptionService,
+		OPMLService:         opmlService,
 		models:              models,
 	}
 }

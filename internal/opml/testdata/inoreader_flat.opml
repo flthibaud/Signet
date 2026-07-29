@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0">
+  <head>
+    <title>Subscriptions of someone</title>
+  </head>
+  <body>
+    <outline text="The Go Blog" title="The Go Blog" type="rss" xmlUrl="https://go.dev/blog/feed.atom" htmlUrl="https://go.dev/blog"/>
+    <outline text="Julia Evans" title="Julia Evans" type="rss" xmlUrl="https://jvns.ca/atom.xml" htmlUrl="https://jvns.ca"/>
+    <outline text="Korben" title="Korben" type="rss" xmlUrl="https://korben.info/feed" htmlUrl="https://korben.info"/>
+  </body>
+</opml>

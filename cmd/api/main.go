@@ -72,6 +72,8 @@ func main() {
 	// 4. Init du scheduler
 	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)
 
+	services.OPMLService.SetSyncTrigger(scheduler)
+
 	app := &application{
 		config:    cfg,
 		logger:    logger,

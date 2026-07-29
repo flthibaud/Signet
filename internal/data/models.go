@@ -21,6 +21,7 @@ type Models struct {
 	Links         LinkModel
 	Articles      ArticleModel
 	Tokens        TokenModel
+	OPMLImports   OPMLImportModel
 }
 
 // For ease of use, we also add a New() method which returns a Models struct containing
@@ -34,5 +35,6 @@ func NewModels(db *sql.DB) Models {
 		Links:         LinkModel{DB: db},
 		Articles:      ArticleModel{DB: db},
 		Tokens:        TokenModel{DB: db},
+		OPMLImports:   OPMLImportModel{DB: db},
 	}
 }

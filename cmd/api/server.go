@@ -37,11 +37,11 @@ func (app *application) serve() error {
 			"signal": s.String(),
 		})
 
-		// Stop the scheduler first, wait for in-flight workers
 		app.scheduler.Stop()
 
-		// Then the article imports a subscription may have left running.
 		app.services.SubscriptionService.Shutdown()
+
+		app.services.OPMLService.Shutdown()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

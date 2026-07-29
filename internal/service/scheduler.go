@@ -21,6 +21,7 @@ type Scheduler struct {
 	workers        int
 	batchSize      int
 	quit           chan struct{}
+	wake           chan struct{}
 	ctx            context.Context // cancelled on Stop to abort in-flight syncs
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
@@ -37,6 +38,10 @@ const DefaultSyncInterval = 15 * time.Minute
 // to be often enough that the table doesn't grow without bound.
 const tokenCleanupInterval = time.Hour
 
+// staleImportAge is how long an OPML import may go without writing progress
+// before it is presumed dead.
+const staleImportAge = 30 * time.Minute
+
 func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
 	if interval <= 0 {
 		interval = DefaultSyncInterval
@@ -50,8 +55,17 @@ func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Dura
 		workers:   workers,
 		batchSize: batchSize,
 		quit:      make(chan struct{}),
+		wake:      make(chan struct{}, 1),
 		ctx:       ctx,
 		cancel:    cancel,
+	}
+}
+
+// TriggerSync asks for a sync pass without waiting for the next tick.
+func (s *Scheduler) TriggerSync() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -73,6 +87,8 @@ func (s *Scheduler) Start() {
 			select {
 			case <-ticker.C:
 				s.syncFeeds()
+			case <-s.wake:
+				s.syncFeeds()
 			case <-s.quit:
 				return
 			}
@@ -86,17 +102,44 @@ func (s *Scheduler) Start() {
 		ticker := time.NewTicker(tokenCleanupInterval)
 		defer ticker.Stop()
 
-		s.purgeExpiredTokens()
+		s.housekeeping()
 
 		for {
 			select {
 			case <-ticker.C:
-				s.purgeExpiredTokens()
+				s.housekeeping()
 			case <-s.quit:
 				return
 			}
 		}
 	})
+}
+
+func (s *Scheduler) housekeeping() {
+	s.purgeExpiredTokens()
+	s.failStaleImports()
+}
+
+func (s *Scheduler) logBackgroundError(err error, component string) {
+	if cancelledByShutdown(s.ctx, err) {
+		return
+	}
+
+	s.logger.PrintError(err, map[string]string{"component": component})
+}
+
+func (s *Scheduler) failStaleImports() {
+	interrupted, err := s.services.models.OPMLImports.FailStale(s.ctx, staleImportAge)
+	if err != nil {
+		s.logBackgroundError(err, "opml_import_cleanup")
+		return
+	}
+
+	if interrupted > 0 {
+		s.logger.PrintInfo("stale OPML imports marked interrupted", map[string]string{
+			"count": strconv.FormatInt(interrupted, 10),
+		})
+	}
 }
 
 // purgeExpiredTokens drops lapsed authentication and activation tokens. They
@@ -105,7 +148,7 @@ func (s *Scheduler) Start() {
 func (s *Scheduler) purgeExpiredTokens() {
 	deleted, err := s.services.models.Tokens.DeleteExpired(s.ctx)
 	if err != nil {
-		s.logger.PrintError(err, map[string]string{"component": "token_cleanup"})
+		s.logBackgroundError(err, "token_cleanup")
 		return
 	}
 
@@ -129,7 +172,7 @@ func (s *Scheduler) syncFeeds() {
 
 	feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
 	if err != nil {
-		s.logger.PrintError(err, map[string]string{"component": "scheduler"})
+		s.logBackgroundError(err, "scheduler")
 		return
 	}
 
