@@ -189,4 +189,38 @@ func seedFeed(t *testing.T, db *sql.DB, title, imageURL string) int64 {
 	return id
 }
 
+// seedFolder inserts a folder for the user. It needs no cleanup of its own:
+// folders cascade off the user seedUser already removes.
+func seedFolder(t *testing.T, db *sql.DB, userID uuid.UUID, name string) int64 {
+	t.Helper()
+
+	var id int64
+	err := db.QueryRowContext(context.Background(), `
+		INSERT INTO folders (user_id, name) VALUES ($1, $2) RETURNING id`,
+		userID, name,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed folder: %v", err)
+	}
+
+	return id
+}
+
+// seedSubscription subscribes the user to a feed, optionally filing it into a
+// folder. It cascades off the user and the feed.
+func seedSubscription(t *testing.T, db *sql.DB, userID uuid.UUID, feedID int64, folderID *int64) int64 {
+	t.Helper()
+
+	var id int64
+	err := db.QueryRowContext(context.Background(), `
+		INSERT INTO subscriptions (user_id, feed_id, folder_id) VALUES ($1, $2, $3) RETURNING id`,
+		userID, feedID, folderID,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+
+	return id
+}
+
 func timePtr(tm time.Time) *time.Time { return &tm }

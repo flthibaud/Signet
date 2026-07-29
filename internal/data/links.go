@@ -67,6 +67,7 @@ type LinkFilters struct {
 	IsStarred *bool
 	Archived  *bool
 	FeedID    *int64
+	FolderID  *int64
 }
 
 // buildLinkFiltersWhere returns the WHERE clauses and their args for f.
@@ -93,6 +94,13 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 	if f.FeedID != nil {
 		args = append(args, *f.FeedID)
 		where = append(where, fmt.Sprintf("l.feed_id = $%d", len(args)))
+	}
+
+	if f.FolderID != nil {
+		args = append(args, *f.FolderID)
+		where = append(where, fmt.Sprintf(
+			"l.feed_id IN (SELECT s.feed_id FROM subscriptions s WHERE s.user_id = $1 AND s.folder_id = $%d)",
+			len(args)))
 	}
 
 	return where, args

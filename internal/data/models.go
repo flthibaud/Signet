@@ -17,6 +17,7 @@ type Models struct {
 	Users         UserModel
 	Feeds         FeedModel
 	Subscriptions SubscriptionModel
+	Folders       FolderModel
 	Links         LinkModel
 	Articles      ArticleModel
 	Tokens        TokenModel
@@ -29,6 +30,7 @@ func NewModels(db *sql.DB) Models {
 		Users:         UserModel{DB: db},
 		Feeds:         FeedModel{DB: db},
 		Subscriptions: SubscriptionModel{DB: db},
+		Folders:       FolderModel{DB: db},
 		Links:         LinkModel{DB: db},
 		Articles:      ArticleModel{DB: db},
 		Tokens:        TokenModel{DB: db},

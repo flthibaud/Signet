@@ -148,7 +148,7 @@ func TestSubscribeCreatesMissingFeed(t *testing.T) {
 	svc := newTestSubscriptionService(feeds, subs, importer)
 	userID := uuid.New()
 
-	sub, err := svc.Subscribe(context.Background(), userID, newFeed.Url)
+	sub, err := svc.Subscribe(context.Background(), userID, newFeed.Url, SubscribeOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestSubscribeReusesExistingFeed(t *testing.T) {
 
 	svc := newTestSubscriptionService(feeds, subs, importer)
 
-	sub, err := svc.Subscribe(context.Background(), uuid.New(), existing.Url)
+	sub, err := svc.Subscribe(context.Background(), uuid.New(), existing.Url, SubscribeOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +200,49 @@ func TestSubscribeReusesExistingFeed(t *testing.T) {
 	if sub.FeedID != existing.ID {
 		t.Errorf("feed id: got %d, want %d", sub.FeedID, existing.ID)
 	}
+
 	svc.Shutdown()
+}
+
+// DeferImport is what keeps an OPML file of 200 feeds from starting 200
+// concurrent imports.
+func TestSubscribeDeferredImport(t *testing.T) {
+	folderID := int64(3)
+
+	feeds := &fakeFeedStore{}
+	subs := &fakeSubscriptionStore{}
+	importer := &fakeFeedImporter{created: &data.Feed{ID: 42}, imported: make(chan struct{})}
+
+	svc := newTestSubscriptionService(feeds, subs, importer)
+
+	sub, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{
+		FolderID:    &folderID,
+		DeferImport: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if sub.FolderID == nil || *sub.FolderID != folderID {
+		t.Errorf("folder: got %v, want %d", sub.FolderID, folderID)
+	}
+
+	// Shutdown waits for anything that was started, so once it returns the
+	// channel is a reliable witness.
+	svc.Shutdown()
+
+	select {
+	case <-importer.imported:
+		t.Error("DeferImport must not start the per-feed article import")
+	default:
+	}
+
+	if len(subs.inserted) != 1 {
+		t.Fatalf("inserted subscriptions: got %d, want 1", len(subs.inserted))
+	}
+	if subs.inserted[0].FolderID == nil || *subs.inserted[0].FolderID != folderID {
+		t.Errorf("the folder was not persisted: %+v", subs.inserted[0])
+	}
 }
 
 func TestSubscribeWhenAlreadySubscribed(t *testing.T) {
@@ -212,7 +254,7 @@ func TestSubscribeWhenAlreadySubscribed(t *testing.T) {
 
 	svc := newTestSubscriptionService(feeds, subs, importer)
 
-	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml")
+	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if !errors.Is(err, ErrAlreadySubscribed) {
 		t.Fatalf("got %v, want ErrAlreadySubscribed", err)
 	}
@@ -236,7 +278,7 @@ func TestSubscribeCleansUpFeedItCreated(t *testing.T) {
 
 	svc := newTestSubscriptionService(feeds, subs, importer)
 
-	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml")
+	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -258,7 +300,7 @@ func TestSubscribeLeavesPreexistingFeedAloneOnFailure(t *testing.T) {
 
 	svc := newTestSubscriptionService(feeds, subs, importer)
 
-	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml")
+	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -286,7 +328,7 @@ func TestSubscribePropagatesFeedErrors(t *testing.T) {
 
 			svc := newTestSubscriptionService(feeds, subs, importer)
 
-			_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml")
+			_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 			if !errors.Is(err, tt.err) {
 				t.Fatalf("got %v, want %v", err, tt.err)
 			}
@@ -308,7 +350,7 @@ func TestSubscribeReportsLookupFailure(t *testing.T) {
 
 	svc := newTestSubscriptionService(feeds, subs, importer)
 
-	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml")
+	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if !errors.Is(err, lookupErr) {
 		t.Fatalf("got %v, want %v", err, lookupErr)
 	}
@@ -331,7 +373,7 @@ func TestShutdownCancelsInFlightImport(t *testing.T) {
 
 	svc, logged := newTestSubscriptionServiceWithLog(feeds, subs, importer)
 
-	if _, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml"); err != nil {
+	if _, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

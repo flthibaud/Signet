@@ -77,12 +77,26 @@ func NewSubscriptionService(models data.Models, feedSvc *FeedService, logger *js
 	}
 }
 
+// SubscribeOptions carries what varies between subscribing from the form and
+// subscribing from an OPML import.
+type SubscribeOptions struct {
+	// FolderID files the subscription, nil leaving it unfiled.
+	FolderID *int64
+
+	// DeferImport skips the per-feed background import. An OPML file holds
+	// hundreds of feeds, and firing one import per entry would have hundreds of
+	// goroutines fetching and scraping whole feeds at once; the importer marks
+	// the feeds due instead and wakes the scheduler once, so the existing worker
+	// pool and per-domain rate limiting do the work.
+	DeferImport bool
+}
+
 // Subscribe signs userID up to the feed at feedURL, creating the feed itself if
 // nobody follows it yet, and kicks off the article import in the background.
 //
 // It returns ErrAlreadySubscribed when the user already follows the feed, and
 // propagates ErrInvalidFeed / ErrFeedNotFound from feed creation.
-func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, feedURL string) (*data.Subscription, error) {
+func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, feedURL string, opts SubscribeOptions) (*data.Subscription, error) {
 	feed, err := s.feeds.GetByURL(ctx, feedURL)
 	if err != nil && !errors.Is(err, data.ErrRecordNotFound) {
 		return nil, err
@@ -129,8 +143,9 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 	}
 
 	subscription := &data.Subscription{
-		UserID: userID,
-		FeedID: feed.ID,
+		UserID:   userID,
+		FeedID:   feed.ID,
+		FolderID: opts.FolderID,
 	}
 
 	if err := s.subs.Insert(ctx, subscription); err != nil {
@@ -143,7 +158,9 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 	// is accurate: the import below hasn't produced anything yet.
 	subscription.Feed = *feed
 
-	s.importAsync(feed)
+	if !opts.DeferImport {
+		s.importAsync(feed)
+	}
 
 	return subscription, nil
 }

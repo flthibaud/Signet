@@ -14,12 +14,11 @@ type Subscription struct {
 	FeedID      int64     `json:"-"`
 	CustomTitle *string   `json:"custom_title"`
 	CustomIcon  *string   `json:"custom_icon"`
-	// Category    *string   `json:"category"`
-	CreatedAt time.Time `json:"created_at"`
-
-	// Embedded
-	Feed        Feed `json:"feed"`
-	UnreadCount int  `json:"unread_count"`
+	FolderID    *int64    `json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
+	Feed        Feed      `json:"feed"`
+	Folder      *Folder   `json:"folder"`
+	UnreadCount int       `json:"unread_count"`
 }
 
 type SubscriptionModel struct {
@@ -51,24 +50,29 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 			s.custom_title,
 			s.custom_icon,
 			s.created_at,
-			
+
 			-- Feed
 			f.id,
 			f.url,
 			f.original_title,
-			f.site_url,
-			f.image_url,
-			f.last_fetched_at,
+			COALESCE(f.site_url, ''),
+			COALESCE(f.image_url, ''),
+			COALESCE(f.last_fetched_at, f.created_at),
 			f.is_active,
-			
+
+			-- Folder (NULL when the subscription is unfiled)
+			fo.id,
+			fo.name,
+
 			-- Unread count
 			COUNT(l.id) FILTER (WHERE l.is_read = FALSE) AS unread_count
-			
+
 		FROM subscriptions s
 		INNER JOIN feeds f ON s.feed_id = f.id
+		LEFT JOIN folders fo ON s.folder_id = fo.id
 		LEFT JOIN links l ON l.feed_id = f.id AND l.user_id = s.user_id
 		WHERE s.user_id = $1
-		GROUP BY s.id, f.id
+		GROUP BY s.id, f.id, fo.id
 		ORDER BY s.created_at DESC`
 
 	rows, err := m.DB.QueryContext(ctx, query, userID)
@@ -82,6 +86,8 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 	for rows.Next() {
 		var s Subscription
 		var f Feed
+		var folderID sql.NullInt64
+		var folderName sql.NullString
 
 		err := rows.Scan(
 			// Subscription
@@ -101,6 +107,10 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 			&f.LastFetchedAt,
 			&f.IsActive,
 
+			// Folder
+			&folderID,
+			&folderName,
+
 			// Unread count
 			&s.UnreadCount,
 		)
@@ -109,6 +119,10 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 		}
 
 		s.Feed = f
+		if folderID.Valid {
+			s.FolderID = &folderID.Int64
+			s.Folder = &Folder{ID: folderID.Int64, UserID: s.UserID, Name: folderName.String}
+		}
 		subscriptions = append(subscriptions, &s)
 	}
 
@@ -165,8 +179,8 @@ func (m SubscriptionModel) Delete(ctx context.Context, userID uuid.UUID, id int6
 
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
 	query := `
-		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, created_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, folder_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at`
 
 	err := m.DB.QueryRowContext(ctx,
@@ -175,6 +189,7 @@ func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscriptio
 		subscription.FeedID,
 		subscription.CustomTitle,
 		subscription.CustomIcon,
+		subscription.FolderID,
 		time.Now(),
 	).Scan(&subscription.ID, &subscription.CreatedAt)
 
