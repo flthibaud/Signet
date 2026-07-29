@@ -42,6 +42,10 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 		app.badRequestResponse(w, r, err)
 		return
 	}
+	if filters.FolderID, err = readOptionalInt64(qs, "folder_id"); err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
 
 	links, hasMore, err := app.models.Links.ListForUser(r.Context(), user.ID, filters, p.Limit(), p.Offset())
 	if err != nil {

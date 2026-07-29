@@ -1,7 +1,40 @@
 import { Loader2, Rss, Trash2 } from "lucide-react";
+import { Link } from "react-router";
 
 import { useSubscriptions, useUnsubscribe } from "~/lib/feeds";
 import type { Subscription } from "~/types/subscription";
+
+const UNFILED = "Uncategorized";
+
+type Group = {
+  folderId: number | null;
+  name: string;
+  subscriptions: Subscription[];
+};
+
+/**
+ * Groups subscriptions by folder, alphabetically, with the unfiled ones last.
+ */
+function groupByFolder(subscriptions: Subscription[]): Group[] {
+  const groups = new Map<string, Group>();
+
+  for (const sub of subscriptions) {
+    const name = sub.folder?.name ?? UNFILED;
+
+    let group = groups.get(name);
+    if (!group) {
+      group = { folderId: sub.folder?.id ?? null, name, subscriptions: [] };
+      groups.set(name, group);
+    }
+    group.subscriptions.push(sub);
+  }
+
+  return [...groups.values()].sort((a, b) => {
+    if (a.folderId === null) return 1;
+    if (b.folderId === null) return -1;
+    return a.name.localeCompare(b.name);
+  });
+}
 
 const SubscriptionList = () => {
   const { data, isPending, isError } = useSubscriptions();
@@ -33,17 +66,43 @@ const SubscriptionList = () => {
     );
   }
 
+  const groups = groupByFolder(subscriptions);
+  const showHeaders = groups.length > 1 || groups[0].folderId !== null;
+
   return (
-    <ul className="mt-10 mx-auto max-w-126 flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
-      {subscriptions.map((sub) => (
-        <SubscriptionRow
-          key={sub.id}
-          subscription={sub}
-          onUnsubscribe={() => unsubscribe.mutate(sub.id)}
-          isRemoving={unsubscribe.isPending && unsubscribe.variables === sub.id}
-        />
+    <div className="mt-10 mx-auto max-w-126 flex flex-col gap-6">
+      {groups.map((group) => (
+        <section key={group.name}>
+          {showHeaders && (
+            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              {group.folderId !== null ? (
+                <Link
+                  to={`/app?folder_id=${group.folderId}`}
+                  className="transition-colors hover:text-[#0084FF]"
+                >
+                  {group.name}
+                </Link>
+              ) : (
+                group.name
+              )}
+            </h2>
+          )}
+
+          <ul className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
+            {group.subscriptions.map((sub) => (
+              <SubscriptionRow
+                key={sub.id}
+                subscription={sub}
+                onUnsubscribe={() => unsubscribe.mutate(sub.id)}
+                isRemoving={
+                  unsubscribe.isPending && unsubscribe.variables === sub.id
+                }
+              />
+            ))}
+          </ul>
+        </section>
       ))}
-    </ul>
+    </div>
   );
 };
 
@@ -80,9 +139,12 @@ const SubscriptionRow = ({
       )}
 
       <div className="flex-1 min-w-0">
-        <div className="font-semibold text-gray-900 dark:text-white truncate">
+        <Link
+          to={`/app?feed_id=${feed.id}`}
+          className="block font-semibold text-gray-900 dark:text-white truncate transition-colors hover:text-[#0084FF]"
+        >
           {title}
-        </div>
+        </Link>
         {feed.site_url && (
           <a
             href={feed.site_url}

@@ -17,9 +17,11 @@ type Models struct {
 	Users         UserModel
 	Feeds         FeedModel
 	Subscriptions SubscriptionModel
+	Folders       FolderModel
 	Links         LinkModel
 	Articles      ArticleModel
 	Tokens        TokenModel
+	OPMLImports   OPMLImportModel
 }
 
 // For ease of use, we also add a New() method which returns a Models struct containing
@@ -29,8 +31,10 @@ func NewModels(db *sql.DB) Models {
 		Users:         UserModel{DB: db},
 		Feeds:         FeedModel{DB: db},
 		Subscriptions: SubscriptionModel{DB: db},
+		Folders:       FolderModel{DB: db},
 		Links:         LinkModel{DB: db},
 		Articles:      ArticleModel{DB: db},
 		Tokens:        TokenModel{DB: db},
+		OPMLImports:   OPMLImportModel{DB: db},
 	}
 }

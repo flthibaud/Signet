@@ -5,6 +5,7 @@ import Profile from "./Profile";
 import ToggleTheme from "./ToggleTheme";
 import Logo from "~/components/Logo";
 import Search from "~/components/Search";
+import FolderList from "./FolderList";
 
 import {
   PanelLeftClose,
@@ -15,6 +16,8 @@ import {
   Rss,
 } from "lucide-react";
 import { twMerge } from "tailwind-merge";
+
+import { folderList } from "~/mocks/folderList";
 
 type LeftSidebarProps = {
   isCollapsed: boolean;
@@ -42,25 +45,25 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
     {
       title: "Home",
       icon: House,
-      color: "fill-accent-2",
+      color: "white",
       url: "/app",
     },
     {
       title: "Search",
       icon: SearchIcon,
-      color: "fill-primary-2",
+      color: "white",
       onClick: () => setVisibleSearch(true),
     },
     {
       title: "Library",
       icon: Library,
-      color: "fill-accent-4",
+      color: "white",
       url: "/app/library",
     },
     {
       title: "Feed",
       icon: Rss,
-      color: "fill-accent-1",
+      color: "white",
       url: "/app/feed",
     },
   ];
@@ -75,21 +78,21 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
     <>
       <div
         className={twMerge(
-          `fixed z-20 top-0 left-0 bottom-0 flex flex-col pt-30 px-0 bg-[#141718]`,
+          `fixed z-20 top-0 left-0 bottom-0 flex flex-col pt-30 px-0 bg-n-7`,
           isCollapsed ? "md:w-24 md:pb-38 w-16 pb-30 md:px-4" : "w-80 pb-58 px-4",
         )}
       >
         <div
           className={`absolute top-0 right-0 left-0 flex items-center h-30 pl-7 pr-6 ${
-            isCollapsed ? "justify-center md:px-4" : "justify-between"
+            isCollapsed ? "justify-center max-md:px-4" : "justify-between"
           }`}
         >
           {!isCollapsed && <Logo />}
           <button className="group tap-highlight-color" onClick={handleClick}>
             {isCollapsed ? (
-              <PanelRightClose className="fill-black transition-colors group-hover:fill-n-3" />
+              <PanelRightClose className="text-n-4 transition-colors group-hover:text-n-3" />
             ) : (
-              <PanelLeftClose className="fill-black transition-colors group-hover:fill-n-3" />
+              <PanelLeftClose className="text-n-4 transition-colors group-hover:text-n-3" />
             )}
           </button>
         </div>
@@ -97,20 +100,21 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
           <Navigation visible={!isCollapsed} items={navigation} />
           <div
             className={`my-4 h-px bg-n-6 ${
-              isCollapsed ? "-mx-4 md:mx-0" : "-mx-2 md:mx-0"
+              isCollapsed ? "-mx-4 max-md:mx-0" : "-mx-2 max-md:mx-0"
             }`}
           ></div>
+          <FolderList visible={!isCollapsed} items={folderList} />
         </div>
-        <div className="absolute left-0 bottom-0 right-0 pb-6 px-4 bg-n-7 before:absolute before:left-0 before:right-0 before:bottom-full before:h-10 before:bg-gradient-to-t before:from-[#131617] before:to-[rgba(19,22,23,0)] before:pointer-events-none md:px-3">
+        <div className="absolute left-0 bottom-0 right-0 pb-6 px-4 bg-n-7 before:absolute before:left-0 before:right-0 before:bottom-full before:h-10 before:bg-linear-to-t before:from-[#131617] before:to-[rgba(19,22,23,0)] before:pointer-events-none max-md:px-3">
           <Profile visible={!isCollapsed} />
           <ToggleTheme visible={!isCollapsed} />
         </div>
       </div>
       <Modal
-        className="md:p-0!"
-        classWrap="flex flex-col overflow-hidden h-[80dvh] md:rounded-3xl rounded-none dark:shadow-[inset_0_0_0_0.0625rem_#232627,0_2rem_4rem_-1rem_rgba(0,0,0,0.33)] dark:md:shadow-none"
-        classButtonClose="hidden md:flex md:absolute md:top-6 md:left-6 dark:fill-n-1"
-        classOverlay="md:bg-n-1"
+        className="max-md:p-0!"
+        classWrap="flex flex-col overflow-hidden h-[80dvh] rounded-3xl max-md:min-h-screen-ios max-md:rounded-none dark:shadow-[inset_0_0_0_0.0625rem_#232627,0_2rem_4rem_-1rem_rgba(0,0,0,0.33)] dark:max-md:shadow-none"
+        classButtonClose="hidden max-md:flex max-md:absolute max-md:top-6 max-md:left-6 dark:text-n-1"
+        classOverlay="max-md:bg-n-1"
         visible={visibleSearch}
         onClose={() => setVisibleSearch(false)}
       >

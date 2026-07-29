@@ -6,11 +6,14 @@ import type { SubscribeInputs } from "./validations/feed";
 
 const subscriptionsKey = ["subscriptions"] as const;
 
-/** Fetches the current user's feed subscriptions. */
-export function useSubscriptions() {
+/**
+ * Fetches the current user's feed subscriptions.
+ */
+export function useSubscriptions({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: subscriptionsKey,
     queryFn: () => apiFetch<SubscriptionsResponse>("/v1/subscriptions"),
+    enabled,
   });
 }
 

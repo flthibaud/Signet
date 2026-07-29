@@ -32,6 +32,10 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodPost, "/v1/subscriptions", app.createSubscriptionHandler)
 	router.HandlerFunc(http.MethodDelete, "/v1/subscriptions/:id", app.deleteSubscriptionHandler)
 
+	router.HandlerFunc(http.MethodPost, "/v1/opml/import", app.importOPMLHandler)
+	router.HandlerFunc(http.MethodGet, "/v1/opml/imports/latest", app.latestOPMLImportHandler)
+	router.HandlerFunc(http.MethodGet, "/v1/opml/export", app.exportOPMLHandler)
+
 	// Articles d'un feed
 	// router.HandlerFunc(http.MethodGet, "/v1/subscriptions/:id/articles", app.listSubscriptionArticlesHandler)
 

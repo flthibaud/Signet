@@ -33,7 +33,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 
 	userID := app.contextGetUser(r).ID
 
-	subscription, err := app.services.SubscriptionService.Subscribe(r.Context(), userID, input.URL)
+	subscription, err := app.services.SubscriptionService.Subscribe(r.Context(), userID, input.URL, service.SubscribeOptions{})
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidFeed):

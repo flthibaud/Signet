@@ -30,7 +30,7 @@ var (
 )
 
 // UserAgent is the User-Agent sent on RSS fetches. It matches the browser the
-// scraper impersonates (see browserUserAgent) so we never announce two different
+// scraper impersonates so we never announce two different
 // browsers from the same deployment.
 const UserAgent = browserUserAgent
 
@@ -42,16 +42,10 @@ const feedProcessTimeout = 8 * time.Minute
 // scrapeTimeout bounds a single article fetch, whichever transport handles it.
 const scrapeTimeout = 30 * time.Second
 
-// maxFeedBytes bounds how much of a feed document we pull into memory. Feed URLs
-// are user-supplied, so a hostile (or merely broken) server can otherwise stream
-// until the process dies. The cap applies to the *decoded* body, so it also
-// bounds a gzip bomb: net/http decompresses transparently and we read the
-// decompressed stream.
+// maxFeedBytes bounds how much of a feed document we pull into memory.
 const maxFeedBytes = 8 << 20
 
 // maxFaviconBytes bounds the homepage HTML we parse to find <link rel="icon">.
-// The link lives in <head>, so truncating the rest costs nothing — html.Parse
-// takes a partial document happily.
 const maxFaviconBytes = 1 << 20
 
 // faviconTimeout bounds the favicon lookup. It is a cosmetic extra on top of a
@@ -60,9 +54,6 @@ const faviconTimeout = 10 * time.Second
 
 var errFeedTooLarge = errors.New("feed body exceeds size limit")
 
-// readFeedBody reads at most maxFeedBytes from r. Reading one byte past the cap
-// is reported as an error rather than silently truncated, which would otherwise
-// surface as a baffling XML syntax error.
 func readFeedBody(r io.Reader) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r, maxFeedBytes+1))
 	if err != nil {
@@ -429,6 +420,17 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, newEtag, newLastModified)
 }
 
+// feedFailureThreshold is how many consecutive failures turn a feed off.
+const feedFailureThreshold = 10
+
+type FeedFetchError struct {
+	Failures int
+	Err      error
+}
+
+func (e *FeedFetchError) Error() string { return e.Err.Error() }
+func (e *FeedFetchError) Unwrap() error { return e.Err }
+
 // markFailed records a feed failure (clearing the lock, incrementing the
 // counter, deactivating after the threshold) and returns an error mentioning
 // the deactivation so the caller logs it. The DB write uses a detached context
@@ -441,10 +443,10 @@ func (s *FeedService) markFailed(ctx context.Context, feedID int64, cause error)
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("marking feed %d failed: %w", feedID, err))
 	}
-	if failures >= 10 {
+	if failures >= feedFailureThreshold {
 		return fmt.Errorf("feed %d deactivated after %d consecutive failures: %w", feedID, failures, cause)
 	}
-	return cause
+	return &FeedFetchError{Failures: failures, Err: cause}
 }
 
 // estimateReadingTime returns an estimated reading time in minutes from the

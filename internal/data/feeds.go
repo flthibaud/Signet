@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type Feed struct {
@@ -88,6 +90,25 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 	}
 
 	return nil
+}
+
+// MarkDueForSync makes feeds eligible for the scheduler's next pass and clears
+// their conditional-request headers.
+func (m FeedModel) MarkDueForSync(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	query := `
+		UPDATE feeds
+		SET last_fetched_at = to_timestamp(0),
+		    fetching_since = NULL,
+		    http_etag = '',
+		    http_last_modified = ''
+		WHERE id = ANY($1)`
+
+	_, err := m.DB.ExecContext(ctx, query, pq.Array(ids))
+	return err
 }
 
 // DeleteIfOrphan removes a feed that no one is subscribed to. It exists to undo

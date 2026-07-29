@@ -8,7 +8,7 @@ export default function DashboardLayout() {
 
   return (
     <div
-      className={`md:pr-6 pr-0 bg-[#141718] ${
+      className={`md:pr-6 pr-0 bg-n-7 ${
         isCollapsed ? "md:pl-24 pl-0" : "md:pl-80 pl-24"
       }`}
     >
@@ -16,13 +16,9 @@ export default function DashboardLayout() {
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
       />
-      <div className="flex md:py-6 py-0 h-screen h-screen-ios">
-        <div className="relative flex grow max-w-full bg-[#FEFEFE] md:rounded-[1.25rem] rounded-none dark:bg-[#232627]">
+      <div className="flex md:py-6 py-0 h-screen-ios">
+        <div className="relative flex grow max-w-full bg-n-1 md:rounded-[1.25rem] rounded-none dark:bg-n-6">
           <div className="relative flex flex-col grow max-w-full overflow-hidden">
-            <Burger
-              className={!isCollapsed ? "hidden" : ""}
-              onClick={() => setIsCollapsed(!isCollapsed)}
-            />
             <Outlet />
           </div>
         </div>

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,5 +97,74 @@ func TestCreateFromURLRejectsGzipBomb(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), errFeedTooLarge.Error()) {
 		t.Errorf("err = %v, want the decompressed body to hit the size limit", err)
+	}
+}
+
+// A feed nobody's server will serve is not this program failing, and the
+// classification the loggers rely on has to survive being wrapped.
+func TestFeedFetchErrorClassification(t *testing.T) {
+	cause := fmt.Errorf("Get %q: %w", "https://slow.test/atom.xml", context.DeadlineExceeded)
+
+	tests := []struct {
+		name         string
+		err          error
+		wantFetchErr bool
+		wantFailures int
+	}{
+		{
+			name:         "routine failure",
+			err:          &FeedFetchError{Failures: 3, Err: cause},
+			wantFetchErr: true,
+			wantFailures: 3,
+		},
+		{
+			name:         "wrapped by a caller",
+			err:          fmt.Errorf("importing feed 75: %w", &FeedFetchError{Failures: 1, Err: cause}),
+			wantFetchErr: true,
+			wantFailures: 1,
+		},
+		{
+			// Deactivation is the one outcome an operator may want to act on,
+			// so it must not be swallowed as routine.
+			name:         "deactivation",
+			err:          fmt.Errorf("feed 75 deactivated after 10 consecutive failures: %w", cause),
+			wantFetchErr: false,
+		},
+		{
+			// An unrecognised failure stays loud rather than being downgraded.
+			name:         "store failure",
+			err:          errors.Join(cause, errors.New("marking feed 75 failed: connection refused")),
+			wantFetchErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var fetchErr *FeedFetchError
+			got := errors.As(tt.err, &fetchErr)
+
+			if got != tt.wantFetchErr {
+				t.Fatalf("errors.As(*FeedFetchError) = %v, want %v", got, tt.wantFetchErr)
+			}
+			if got && fetchErr.Failures != tt.wantFailures {
+				t.Errorf("failures = %d, want %d", fetchErr.Failures, tt.wantFailures)
+			}
+		})
+	}
+}
+
+// The wrapper must stay transparent to errors.Is, or a shutdown would start
+// being reported as a feed failure.
+func TestFeedFetchErrorUnwraps(t *testing.T) {
+	err := &FeedFetchError{Failures: 1, Err: fmt.Errorf("fetching: %w", context.Canceled)}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Error("errors.Is(err, context.Canceled) = false, want true")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !cancelledByShutdown(ctx, err) {
+		t.Error("a cancelled import wrapped as a fetch failure must still read as a shutdown")
 	}
 }

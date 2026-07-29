@@ -9,11 +9,13 @@ import {
   Rss,
   Star,
   Undo2,
+  X,
 } from "lucide-react";
 import type { LinksResponse } from "~/types/link";
 import { formatDate } from "~/utils/formatDate";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { apiFetch } from "~/lib/api";
+import { useSubscriptions } from "~/lib/feeds";
 import { useUpdateLink } from "~/lib/links";
 
 const FILTERS = [
@@ -36,11 +38,47 @@ function savedFilter(): FilterId {
   return FILTERS.some((f) => f.id === saved) ? (saved as FilterId) : "all";
 }
 
+type Scope = {
+  key: string;
+  params: string;
+  feedId: number | null;
+  folderId: number | null;
+};
+
+function readScope(searchParams: URLSearchParams): Scope {
+  const feedId = Number(searchParams.get("feed_id")) || null;
+  const folderId = Number(searchParams.get("folder_id")) || null;
+
+  if (feedId) {
+    return { key: `feed:${feedId}`, params: `&feed_id=${feedId}`, feedId, folderId: null };
+  }
+  if (folderId) {
+    return { key: `folder:${folderId}`, params: `&folder_id=${folderId}`, feedId: null, folderId };
+  }
+  return { key: "all", params: "", feedId: null, folderId: null };
+}
+
+function useScopeLabel(scope: Scope): string | null {
+  const { data } = useSubscriptions({ enabled: scope.key !== "all" });
+
+  if (scope.key === "all") return null;
+
+  const subscriptions = data?.subscriptions ?? [];
+
+  if (scope.feedId !== null) {
+    const match = subscriptions.find((s) => s.feed.id === scope.feedId);
+    return match?.custom_title || match?.feed.title || "This feed";
+  }
+
+  const match = subscriptions.find((s) => s.folder?.id === scope.folderId);
+  return match?.folder?.name ?? "This folder";
+}
+
 export const Links = () => {
   const loaderRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollPosRef = useRef(0);
-  const scrollRestoredRef = useRef(false);
+  const scrollRestoredRef = useRef<string | null>(null);
   const updateLink = useUpdateLink();
 
   const [filter, setFilter] = useState<FilterId>(savedFilter);
@@ -50,11 +88,18 @@ export const Links = () => {
   const filterParams = FILTERS.find((f) => f.id === filter)?.params ?? "";
   const showingArchived = filter === "archived";
 
+  const [searchParams] = useSearchParams();
+  const scope = readScope(searchParams);
+  const scopeLabel = useScopeLabel(scope);
+  const scrollKey = `${SCROLL_KEY}:${scope.key}`;
+
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<LinksResponse>({
-      queryKey: ["links", filter],
+      queryKey: ["links", filter, scope.key],
       queryFn: ({ pageParam }) =>
-        apiFetch<LinksResponse>(`/v1/links?page=${pageParam}${filterParams}`),
+        apiFetch<LinksResponse>(
+          `/v1/links?page=${pageParam}${filterParams}${scope.params}`,
+        ),
       initialPageParam: 1,
       getNextPageParam: (lastPage) =>
         lastPage.metadata.has_more
@@ -73,12 +118,10 @@ export const Links = () => {
     sessionStorage.setItem(FILTER_KEY, id);
     // A new filter means a new list: start back at the top.
     scrollPosRef.current = 0;
-    sessionStorage.removeItem(SCROLL_KEY);
+    sessionStorage.removeItem(scrollKey);
     scrollContainerRef.current?.scrollTo({ top: 0 });
   };
 
-  // Track the container's scroll position and persist it when the list
-  // unmounts (i.e. when navigating to an article).
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -90,26 +133,21 @@ export const Links = () => {
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
-      sessionStorage.setItem(SCROLL_KEY, String(scrollPosRef.current));
+      sessionStorage.setItem(scrollKey, String(scrollPosRef.current));
     };
-  }, []);
+  }, [scrollKey]);
 
-  // Restore the saved position once the cached pages have rendered, before
-  // the browser paints, so coming back from an article doesn't flash the top
-  // of the list.
   useLayoutEffect(() => {
     const el = scrollContainerRef.current;
-    if (!el || scrollRestoredRef.current || links.length === 0) return;
-    scrollRestoredRef.current = true;
-
-    const saved = Number(sessionStorage.getItem(SCROLL_KEY) ?? 0);
-    if (saved > 0) {
-      // "instant" overrides the container's scroll-smooth, which would
-      // otherwise animate the restoration from the top.
-      el.scrollTo({ top: saved, behavior: "instant" });
-      scrollPosRef.current = el.scrollTop;
+    if (!el || scrollRestoredRef.current === scrollKey || links.length === 0) {
+      return;
     }
-  }, [links.length]);
+    scrollRestoredRef.current = scrollKey;
+
+    const saved = Number(sessionStorage.getItem(scrollKey) ?? 0);
+    el.scrollTo({ top: saved, behavior: "instant" });
+    scrollPosRef.current = el.scrollTop;
+  }, [links.length, scrollKey]);
 
   const toggleSelected = (slug: string) => {
     setSelected((prev) => {
@@ -194,6 +232,17 @@ export const Links = () => {
             ))}
           </div>
         </div>
+
+        {scopeLabel && selected.size === 0 && (
+          <Link
+            to="/app"
+            title="Show every feed"
+            className="flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-full text-xs font-medium bg-primary-1/10 text-primary-1 transition-colors hover:bg-primary-1/20"
+          >
+            <span className="max-w-40 truncate">{scopeLabel}</span>
+            <X size={14} />
+          </Link>
+        )}
 
         {selected.size > 0 && (
           <div className="flex items-center gap-1 shrink-0">

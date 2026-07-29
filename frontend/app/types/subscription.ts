@@ -9,12 +9,19 @@ export interface Feed {
   created_at: string;
 }
 
+export interface Folder {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
 export interface Subscription {
   id: number;
   custom_title: string | null;
   custom_icon: string | null;
   created_at: string;
   feed: Feed;
+  folder: Folder | null;
   unread_count: number;
 }
 
