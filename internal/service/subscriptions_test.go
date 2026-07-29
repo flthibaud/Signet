@@ -26,6 +26,11 @@ type fakeFeedStore struct {
 	// deletedIDs records every DeleteIfOrphan call, which is how the tests tell
 	// a compensated feed from one that was left alone.
 	deletedIDs []int64
+
+	// markedDue records every MarkDueForSync call, which is how the tests see
+	// whether a new subscriber will be served a full fetch rather than a 304.
+	markedDue [][]int64
+	markErr   error
 }
 
 func (f *fakeFeedStore) GetByURL(ctx context.Context, url string) (*data.Feed, error) {
@@ -41,6 +46,11 @@ func (f *fakeFeedStore) GetByURL(ctx context.Context, url string) (*data.Feed, e
 func (f *fakeFeedStore) DeleteIfOrphan(ctx context.Context, id int64) error {
 	f.deletedIDs = append(f.deletedIDs, id)
 	return f.deleteErr
+}
+
+func (f *fakeFeedStore) MarkDueForSync(ctx context.Context, ids []int64) error {
+	f.markedDue = append(f.markedDue, ids)
+	return f.markErr
 }
 
 type fakeSubscriptionStore struct {
@@ -201,6 +211,33 @@ func TestSubscribeReusesExistingFeed(t *testing.T) {
 		t.Errorf("feed id: got %d, want %d", sub.FeedID, existing.ID)
 	}
 
+	if len(feeds.markedDue) != 1 {
+		t.Fatalf("MarkDueForSync calls: got %d, want 1", len(feeds.markedDue))
+	}
+	if len(feeds.markedDue[0]) != 1 || feeds.markedDue[0][0] != existing.ID {
+		t.Errorf("marked %v due, want just feed %d", feeds.markedDue[0], existing.ID)
+	}
+	svc.Shutdown()
+}
+
+// The mirror case: a feed that was just created has no ETag and its import is
+// about to fetch everything anyway, so there is nothing to reset.
+func TestSubscribeDoesNotResetFreshFeed(t *testing.T) {
+	newFeed := &data.Feed{ID: 42, Url: "https://example.com/feed.xml"}
+
+	feeds := &fakeFeedStore{} // nothing in the database
+	subs := &fakeSubscriptionStore{}
+	importer := &fakeFeedImporter{created: newFeed}
+
+	svc := newTestSubscriptionService(feeds, subs, importer)
+
+	if _, err := svc.Subscribe(context.Background(), uuid.New(), newFeed.Url, SubscribeOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(feeds.markedDue) != 0 {
+		t.Errorf("a freshly created feed should not be marked due, got %v", feeds.markedDue)
+	}
 	svc.Shutdown()
 }
 

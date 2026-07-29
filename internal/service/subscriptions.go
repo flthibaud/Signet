@@ -25,6 +25,7 @@ var ErrAlreadySubscribed = errors.New("already subscribed to this feed")
 type feedStore interface {
 	GetByURL(ctx context.Context, url string) (*data.Feed, error)
 	DeleteIfOrphan(ctx context.Context, id int64) error
+	MarkDueForSync(ctx context.Context, ids []int64) error
 }
 
 type subscriptionStore interface {
@@ -157,6 +158,19 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 	// rather than make it fetch the list again. UnreadCount stays at zero, which
 	// is accurate: the import below hasn't produced anything yet.
 	subscription.Feed = *feed
+
+	// A feed the instance already had carries an ETag, and the import below
+	// would be answered with a 304 — which returns before creating a single
+	// link, leaving this subscriber with an empty library until the publisher
+	// happens to post again. Clearing the caching headers forces one full fetch.
+	if !feedCreated {
+		if err := s.feeds.MarkDueForSync(ctx, []int64{feed.ID}); err != nil {
+			s.logger.PrintError(err, map[string]string{
+				"context": "marking an existing feed due for a new subscriber",
+				"feed_id": strconv.FormatInt(feed.ID, 10),
+			})
+		}
+	}
 
 	if !opts.DeferImport {
 		s.importAsync(feed)
