@@ -9,6 +9,7 @@
 - [Authentification](#authentification)
 - [Modèle de données](#modèle-de-données)
 - [Flux d'import RSS](#flux-dimport-rss)
+- [Import / export OPML](#import--export-opml)
 - [Déduplication](#déduplication)
 - [Requêtes SQL courantes](#requêtes-sql-courantes)
 - [Configuration](#configuration)
@@ -130,14 +131,17 @@ L'application suit une architecture en 3 couches :
 | `GET` | `/v1/readiness` | Non | Readiness : `PingContext` sur la base (timeout 2s), `503` si injoignable |
 | `POST` | `/v1/users` | Non | Inscription d'un utilisateur |
 | `POST` | `/v1/tokens/authentication` | Non | Connexion (obtenir un token) |
-| `GET` | `/v1/subscriptions` | Oui | Liste des abonnements RSS |
+| `GET` | `/v1/subscriptions` | Oui | Liste des abonnements RSS, avec leur dossier |
 | `POST` | `/v1/subscriptions` | Oui | S'abonner à un flux RSS |
+| `DELETE` | `/v1/subscriptions/:id` | Oui | Se désabonner d'un flux |
+| `POST` | `/v1/opml/import` | Oui | Importer une liste d'abonnements (corps = le fichier, 2 Mo max) → `202` + le job |
+| `GET` | `/v1/opml/imports/latest` | Oui | Progression et bilan du dernier import |
+| `GET` | `/v1/opml/export` | Oui | Exporter ses abonnements au format OPML |
 
 ### Endpoints prévus (non implémentés)
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
-| `DELETE` | `/v1/subscriptions/:id` | Se désabonner d'un flux |
 | `GET` | `/v1/subscriptions/:id/articles` | Articles d'un flux |
 | `GET` | `/v1/articles` | Liste des articles sauvés |
 | `GET` | `/v1/articles/:slug` | Détail d'un article |
@@ -334,8 +338,11 @@ Rien d'autre ne purge la table `tokens` : les rangées périmées n'authentifien
 ```
 ┌─────────┐       ┌──────────────┐       ┌───────┐
 │  users  │───────│ subscriptions│───────│ feeds │
-└────┬────┘       └──────────────┘       └───┬───┘
-     │                                       │
+└────┬────┘       └───────┬──────┘       └───┬───┘
+     │                    │                  │
+     │              ┌─────▼─────┐            │
+     │              │  folders  │            │
+     │              └───────────┘            │
      │            ┌───────┐                  │
      └────────────│ links │──────────────────┘
                   └───┬───┘
@@ -412,10 +419,30 @@ user_id      UUID REFERENCES users
 feed_id      BIGINT REFERENCES feeds
 custom_title TEXT               -- Override du titre
 custom_icon  TEXT               -- Emoji ou URL
-category     TEXT               -- "Tech", "News", etc.
+folder_id    BIGINT REFERENCES folders ON DELETE SET NULL  -- NULL = non classé
 created_at   TIMESTAMP
 
 UNIQUE(user_id, feed_id)
+```
+
+#### `folders`
+
+Dossiers d'abonnements, à plat comme chez Feedly. Ils sont aujourd'hui créés
+uniquement par un import OPML ; les gérer à la main (créer, renommer, ranger un
+flux) reste à faire.
+
+`folder_id NULL` **est** la catégorie « Uncategorized » : c'est un regroupement
+que l'UI applique, pas une ligne. Une ligne sentinelle obligerait à la créer
+pour chaque inscrit, à interdire sa suppression, et à l'exclure à l'écriture de
+l'OPML — les lecteurs sortant les flux non classés à la racine.
+
+```sql
+id         BIGINT PRIMARY KEY
+user_id    UUID REFERENCES users ON DELETE CASCADE
+name       TEXT
+created_at TIMESTAMP
+
+UNIQUE(user_id, name)   -- rend FolderModel.GetOrCreate idempotent
 ```
 
 #### `links`
@@ -546,6 +573,90 @@ if !linkExists(userID, article.ID) {
 | `github.com/mmcdole/gofeed` | Parsing RSS/Atom |
 | `codeberg.org/readeck/go-readability/v2` | Extraction du contenu (readability) |
 | `github.com/microcosm-cc/bluemonday` | Sanitization HTML (XSS) |
+
+---
+
+## Import / export OPML
+
+L'OPML est le format d'échange de tous les lecteurs RSS : sans lui, personne ne
+migre depuis Feedly ou Inoreader sans ressaisir ses URLs, et s'abonner dans
+Signet serait un aller sans retour. `internal/opml` lit et écrit le format, sans
+rien connaître des modèles.
+
+### Pourquoi l'import est un job et pas une requête
+
+Un OPML de 200 flux, c'est 200 fetchs HTTP (`FeedService.CreateFromURL`) : aucun
+client n'attend ça. `POST /v1/opml/import` crée donc une ligne `opml_imports`,
+lance le travail en tâche de fond et rend `202`. Le front suit via
+`GET /v1/opml/imports/latest`, qu'il interroge toutes les deux secondes tant que
+le job tourne.
+
+La ligne **survit à la fin du job** : c'est elle qui porte le bilan
+(`38 importés · 2 déjà abonnés · 2 en échec`, avec le détail des échecs), et un
+rechargement de page doit pouvoir le retrouver. Pour autant la table ne grossit
+pas : `Insert` supprime les imports précédents du même utilisateur, ce qui la
+borne au nombre de comptes sans aucun travail de fond.
+
+```
+POST /v1/opml/import
+  ├── opml.Parse            outlines imbriqués aplatis, doublons retirés
+  ├── OPMLImports.Insert    remplace l'import précédent → 202
+  └── goroutine détachée
+        ├── Folders.GetOrCreate   une fois par nom distinct, séquentiellement
+        ├── 4 workers → SubscriptionService.Subscribe(..., DeferImport: true)
+        │     └── AppendResult    compteurs + ligne de rapport, un seul UPDATE
+        ├── Feeds.MarkDueForSync  sur les flux souscrits
+        ├── Scheduler.TriggerSync réveille le pool de sync
+        └── MarkFinished          completed | interrupted
+```
+
+### Les deux pièges de l'import en masse
+
+**La ruée des imports d'articles.** `Subscribe` lance normalement l'import des
+articles du flux en tâche de fond. Sur 200 lignes d'OPML, ce sont 200 goroutines
+qui fetchent et scrapent des flux entiers en même temps. D'où
+`SubscribeOptions.DeferImport` : l'import OPML marque les flux comme dus puis
+réveille le scheduler **une fois**, et c'est son pool de workers — avec son rate
+limiting par domaine — qui fait le travail. Un tick ne traitant que `batchSize`
+flux, un gros import se remplit sur plusieurs passes.
+
+**Le 304 qui vide la bibliothèque.** S'abonner à un flux que l'instance connaît
+déjà envoie un `If-None-Match` avec l'ETag stocké. Le serveur répond `304`,
+`ImportArticlesForSubscribers` retourne avant la boucle qui crée les `links`, et
+le nouvel abonné n'a **aucun article** — jusqu'à ce que l'éditeur publie. D'où
+`Feeds.MarkDueForSync`, qui remet `last_fetched_at` à l'époque et vide
+`http_etag` / `http_last_modified` pour forcer un `200`. Elle est appelée aussi
+bien par l'import OPML que par `Subscribe` sur un flux préexistant, ce qui
+corrige le même trou sur le chemin unitaire.
+
+### Reprise après crash
+
+Un job dont le processus meurt resterait `running` pour toujours. Le ménage
+horaire du scheduler (`housekeeping`) appelle `OPMLImports.FailStale` : tout job
+dont `updated_at` n'a pas bougé depuis 30 minutes passe `interrupted`.
+`updated_at` est un vrai battement de cœur — le trigger
+`update_opml_imports_modtime` le rafraîchit à chaque `AppendResult`, donc à
+chaque flux traité. Un `SIGTERM` propre n'attend pas ce balayage : `Shutdown`
+annule le contexte et le job s'enregistre lui-même comme `interrupted`, via un
+contexte détaché de l'annulation.
+
+### Dossiers et profondeur
+
+OPML 2.0 autorise une imbrication arbitraire. La quasi-totalité des lecteurs
+exportent un seul niveau, mais NewsBlur et Thunderbird imbriquent. Les dossiers
+de Signet étant plats, `opml.Parse` joint le chemin des ancêtres :
+`Tech > Langages > Go` devient le dossier `"Tech / Langages / Go"` (5 niveaux
+maximum). `opml.Write` réécrit un seul niveau, nom tel quel : ce qui est affiché
+est ce qui est exporté.
+
+### Limites volontaires
+
+| Garde | Valeur | Raison |
+|-------|--------|--------|
+| Taille du corps | 2 Mo | Mille flux tiennent bien en dessous |
+| Nombre d'entrées | 1000 | Chaque entrée coûte un fetch : c'est autant un rate limit qu'une limite de taille |
+| Workers d'import | 4 | Borne ce qu'un seul utilisateur fait marteler au réseau |
+| Schémas d'URL | `http(s)` uniquement | Le reste de la défense SSRF est assuré par `internal/safedial` |
 
 ---
 
