@@ -30,7 +30,7 @@ var (
 )
 
 // UserAgent is the User-Agent sent on RSS fetches. It matches the browser the
-// scraper impersonates (see browserUserAgent) so we never announce two different
+// scraper impersonates so we never announce two different
 // browsers from the same deployment.
 const UserAgent = browserUserAgent
 
@@ -42,16 +42,10 @@ const feedProcessTimeout = 8 * time.Minute
 // scrapeTimeout bounds a single article fetch, whichever transport handles it.
 const scrapeTimeout = 30 * time.Second
 
-// maxFeedBytes bounds how much of a feed document we pull into memory. Feed URLs
-// are user-supplied, so a hostile (or merely broken) server can otherwise stream
-// until the process dies. The cap applies to the *decoded* body, so it also
-// bounds a gzip bomb: net/http decompresses transparently and we read the
-// decompressed stream.
+// maxFeedBytes bounds how much of a feed document we pull into memory.
 const maxFeedBytes = 8 << 20
 
 // maxFaviconBytes bounds the homepage HTML we parse to find <link rel="icon">.
-// The link lives in <head>, so truncating the rest costs nothing — html.Parse
-// takes a partial document happily.
 const maxFaviconBytes = 1 << 20
 
 // faviconTimeout bounds the favicon lookup. It is a cosmetic extra on top of a
@@ -60,9 +54,6 @@ const faviconTimeout = 10 * time.Second
 
 var errFeedTooLarge = errors.New("feed body exceeds size limit")
 
-// readFeedBody reads at most maxFeedBytes from r. Reading one byte past the cap
-// is reported as an error rather than silently truncated, which would otherwise
-// surface as a baffling XML syntax error.
 func readFeedBody(r io.Reader) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r, maxFeedBytes+1))
 	if err != nil {
