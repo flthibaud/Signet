@@ -55,27 +55,27 @@ const Select = ({
                     <>
                         <ListboxButton
                             className={twMerge(
-                                `flex items-center w-full h-13 px-4 rounded-xl bg-[#FEFEFE] base2 outline-none tap-highlight-color ${
+                                `flex items-center w-full h-13 px-4 rounded-xl bg-n-1 base2 outline-none tap-highlight-color ${
                                     small
-                                        ? `h-9 pr-3 rounded-md shadow-[0_0.125rem_0.25rem_rgba(0,0,0,0.15)] dark:shadow-[0_0.125rem_0.25rem_rgba(0,0,0,0.15),inset_0_0_0_0.0625rem_rgba(254,254,254,.1)] dark:bg-[#232627] ${
+                                        ? `h-9 pr-3 rounded-md shadow-[0_0.125rem_0.25rem_rgba(0,0,0,0.15)] dark:shadow-[0_0.125rem_0.25rem_rgba(0,0,0,0.15),inset_0_0_0_0.0625rem_rgba(254,254,254,.1)] dark:bg-n-6 ${
                                               open &&
                                               "shadow-[0_0.125rem_0.25rem_rgba(0,0,0,0.15)]"
                                           }`
                                         : `shadow-[inset_0_0_0_0.0625rem_#E8ECEF] dark:shadow-[inset_0_0_0_0.0625rem_#343839] dark:bg-transparent ${
                                               open &&
-                                              "!shadow-[inset_0_0_0_0.125rem_#0084FF]"
+                                              "shadow-[inset_0_0_0_0.125rem_#0084FF]!"
                                           }`
                                 } ${classButton}`
                             )}
                         >
                             {title && (
-                                <div className="shrink-0 mr-2 pr-2 border-r border-n-3 text-n-4 dark:border-[#6C7275]/50">
+                                <div className="shrink-0 mr-2 pr-2 border-r border-n-3 text-n-4 dark:border-n-4/50">
                                     {title}
                                 </div>
                             )}
                             {Icon && (
                                 <Icon
-                                    className={`shrink-0 mr-2 dark:text-[#6C7275] ${
+                                    className={`shrink-0 mr-2 dark:text-n-4 ${
                                         small && "w-5 h-5 mr-1.5"
                                     } ${classIcon}`}
                                 />
@@ -87,7 +87,7 @@ const Select = ({
                                 ></div>
                             )}
                             {ValueIcon && (
-                                <ValueIcon className="w-5 h-5 mr-3 dark:text-[#FEFEFE]" />
+                                <ValueIcon className="w-5 h-5 mr-3 dark:text-n-1" />
                             )}
                             <span
                                 className={`mr-auto truncate ${
@@ -97,13 +97,13 @@ const Select = ({
                                 {value ? (
                                     value.title
                                 ) : (
-                                    <span className="text-[#6C7275]">
+                                    <span className="text-n-4">
                                         {placeholder}
                                     </span>
                                 )}
                             </span>
                             <ChevronDown
-                                className={`shrink-0 ml-2 transition-transform dark:text-[#FEFEFE] ${
+                                className={`shrink-0 ml-2 transition-transform dark:text-n-1 ${
                                     open && "rotate-180"
                                 } ${small && "ml-1"} ${classArrow}`}
                             />
@@ -115,7 +115,7 @@ const Select = ({
                         >
                             <ListboxOptions
                                 className={twMerge(
-                                    `absolute left-0 right-0 w-full mt-2 p-2 bg-[#FEFEFE] rounded-lg shadow-[0_0_1rem_0.25rem_rgba(0,0,0,0.04),0_2rem_2rem_-1.5rem_rgba(0,0,0,0.1),inset_0_0_0_0.0625rem_#E8ECEF] outline-none dark:shadow-[0_0_1rem_0.25rem_rgba(0,0,0,0.04),0_2rem_2rem_-1.5rem_rgba(0,0,0,0.1),inset_0_0_0_0.0625rem_#343839] dark:bg-[#232627] ${
+                                    `absolute left-0 right-0 w-full mt-2 p-2 bg-n-1 rounded-lg shadow-[0_0_1rem_0.25rem_rgba(0,0,0,0.04),0_2rem_2rem_-1.5rem_rgba(0,0,0,0.1),inset_0_0_0_0.0625rem_#E8ECEF] outline-none dark:shadow-[0_0_1rem_0.25rem_rgba(0,0,0,0.04),0_2rem_2rem_-1.5rem_rgba(0,0,0,0.1),inset_0_0_0_0.0625rem_#343839] dark:bg-n-6 ${
                                         small && "right-auto mt-1 shadow-md"
                                     } ${
                                         up &&
@@ -131,7 +131,7 @@ const Select = ({
 
                                     return (
                                         <ListboxOption
-                                            className={`flex items-start p-2 rounded-lg base2 text-[#6C7275] transition-colors cursor-pointer hover:text-[#141718] ui-selected:!bg-[#E8ECEF]/50 ui-selected:!text-[#141718] tap-highlight-color dark:hover:text-[#E8ECEF] dark:ui-selected:!bg-[#141718] dark:ui-selected:!text-[#FEFEFE] ${
+                                            className={`flex items-start p-2 rounded-lg base2 text-n-4 transition-colors cursor-pointer hover:text-n-7 ui-selected:bg-[#E8ECEF]!/50 ui-selected:text-[#141718]! tap-highlight-color dark:hover:text-n-3 dark:ui-selected:bg-[#141718]! dark:ui-selected:text-[#FEFEFE]! ${
                                                 small && "py-1 font-semibold"
                                             } ${classOption}`}
                                             key={item.id}
@@ -139,7 +139,7 @@ const Select = ({
                                         >
                                             {item.color && (
                                                 <div
-                                                    className="shrink-0 w-3.5 h-3.5 mt-[0.3125rem] ml-1 mr-4 rounded"
+                                                    className="shrink-0 w-3.5 h-3.5 mt-1.25 ml-1 mr-4 rounded"
                                                     style={{
                                                         backgroundColor:
                                                             item.color,
@@ -147,13 +147,13 @@ const Select = ({
                                                 ></div>
                                             )}
                                             {ItemIcon && (
-                                                <ItemIcon className="w-5 h-5 mt-0.5 mr-3 dark:text-[#FEFEFE]" />
+                                                <ItemIcon className="w-5 h-5 mt-0.5 mr-3 dark:text-n-1" />
                                             )}
                                             <div className="mr-auto">
                                                 {item.title}
                                             </div>
                                             {!small && (
-                                                <Check className="hidden w-5 h-5 ml-2 mt-0.5 text-[#141718] ui-selected:inline-block dark:text-[#FEFEFE]" />
+                                                <Check className="hidden w-5 h-5 ml-2 mt-0.5 text-n-7 ui-selected:inline-block dark:text-n-1" />
                                             )}
                                         </ListboxOption>
                                     );

@@ -63,16 +63,15 @@ const Search = () => {
       className="flex flex-col min-h-0 h-full"
       onSubmit={(e) => e.preventDefault()}
     >
-      {/* Fixed header: search field */}
-      <div className="shrink-0 relative border-b border-[#E8ECEF] dark:border-[#232627]">
+      <div className="shrink-0 relative border-b border-n-3 dark:border-n-6">
         <button
-          className="group absolute top-7 left-10 outline-none md:hidden"
+          className="group absolute top-7 left-10 outline-none max-md:hidden"
           type="submit"
         >
-          <SearchIcon className="w-8 h-8 fill-[#6C7275]/50 transition-colors group-hover:fill-[#141718] dark:group-hover:fill-[#E8ECEF]" />
+          <SearchIcon className="w-8 h-8 fill-n-4/50 transition-colors group-hover:fill-n-7 dark:group-hover:fill-n-3" />
         </button>
         <input
-          className="w-full h-22 pl-24 pr-5 bg-transparent border-none outline-none h5 text-[#141718] placeholder:text-[#6C7275]/50 md:h-18 md:pl-18 dark:text-[#FEFEFE]"
+          className="w-full h-22 pl-24 pr-5 bg-transparent border-none outline-none h5 text-n-7 placeholder:text-n-4/50 max-md:h-18 max-md:pl-18 dark:text-n-1"
           type="text"
           name="search"
           placeholder="Search"
@@ -83,7 +82,7 @@ const Search = () => {
         />
       </div>
       {/* Fixed filters row */}
-      <div className="shrink-0 pt-5 px-10 pb-5 md:px-6 md:pb-4">
+      <div className="shrink-0 pt-5 px-10 pb-5 max-md:px-6 max-md:pb-4">
         <div className="md:flex block space-y-4 md:space-y-0">
           <Select
             className="md:w-[10.31rem] md:mr-3 w-full mr-0"
@@ -112,19 +111,19 @@ const Search = () => {
         </div>
       </div>
       {/* Scrollable results: only this region scrolls */}
-      <div className="grow min-h-0 overflow-y-auto px-10 pb-6 md:px-6 scrollbar-none">
+      <div className="grow min-h-0 overflow-y-auto px-10 pb-6 max-md:px-6 scrollbar-none">
         {isPending ? (
-          <div className="flex justify-center py-10 text-[#6C7275]/50">
+          <div className="flex justify-center py-10 text-n-4/50">
             <LoaderCircle className="w-6 h-6 animate-spin" />
           </div>
         ) : isError ? (
-          <div className="py-10 text-center caption1 text-[#6C7275]">
+          <div className="py-10 text-center caption1 text-n-4">
             {error instanceof Error
               ? error.message
               : "Search is unavailable right now."}
           </div>
         ) : groups.length === 0 ? (
-          <div className="py-10 text-center caption1 text-[#6C7275]">
+          <div className="py-10 text-center caption1 text-n-4">
             {query
               ? `No articles match “${query}”.`
               : typed
