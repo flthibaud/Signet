@@ -166,15 +166,22 @@ func (m SubscriptionModel) Delete(ctx context.Context, userID uuid.UUID, id int6
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
+	return checkOneRow(result)
+}
+
+// SetFolder files a subscription into a folder, or unfiles it when folderID is
+// nil. The folder's ownership is checked by the caller: folding it into this
+// UPDATE as a subquery would write NULL when the folder is someone else's,
+// unfiling the subscription instead of refusing.
+func (m SubscriptionModel) SetFolder(ctx context.Context, userID uuid.UUID, id int64, folderID *int64) error {
+	query := `UPDATE subscriptions SET folder_id = $1 WHERE id = $2 AND user_id = $3`
+
+	result, err := m.DB.ExecContext(ctx, query, folderID, id, userID)
 	if err != nil {
 		return err
 	}
-	if rowsAffected == 0 {
-		return ErrRecordNotFound
-	}
 
-	return nil
+	return checkOneRow(result)
 }
 
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
