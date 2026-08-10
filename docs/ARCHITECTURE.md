@@ -133,7 +133,12 @@ L'application suit une architecture en 3 couches :
 | `POST` | `/v1/tokens/authentication` | Non | Connexion (obtenir un token) |
 | `GET` | `/v1/subscriptions` | Oui | Liste des abonnements RSS, avec leur dossier |
 | `POST` | `/v1/subscriptions` | Oui | S'abonner à un flux RSS |
+| `PATCH` | `/v1/subscriptions/:id` | Oui | Ranger un flux dans un dossier (`folder_id`, `null` pour déclasser) |
 | `DELETE` | `/v1/subscriptions/:id` | Oui | Se désabonner d'un flux |
+| `GET` | `/v1/folders` | Oui | Liste des dossiers, par ordre alphabétique |
+| `POST` | `/v1/folders` | Oui | Créer un dossier |
+| `PATCH` | `/v1/folders/:id` | Oui | Renommer un dossier |
+| `DELETE` | `/v1/folders/:id` | Oui | Supprimer un dossier ; ses flux repassent non classés |
 | `POST` | `/v1/opml/import` | Oui | Importer une liste d'abonnements (corps = le fichier, 2 Mo max) → `202` + le job |
 | `GET` | `/v1/opml/imports/latest` | Oui | Progression et bilan du dernier import |
 | `GET` | `/v1/opml/export` | Oui | Exporter ses abonnements au format OPML |
@@ -427,14 +432,24 @@ UNIQUE(user_id, feed_id)
 
 #### `folders`
 
-Dossiers d'abonnements, à plat comme chez Feedly. Ils sont aujourd'hui créés
-uniquement par un import OPML ; les gérer à la main (créer, renommer, ranger un
-flux) reste à faire.
+Dossiers d'abonnements, à plat comme chez Feedly. Ils naissent d'un import OPML
+ou de la sidebar, qui les crée, les renomme et les supprime via `/v1/folders`.
+
+Ils n'ont pas de couleur : ce sont les flux qui portent une identité visuelle,
+avec le favicon de `feeds.image_url`.
 
 `folder_id NULL` **est** la catégorie « Uncategorized » : c'est un regroupement
 que l'UI applique, pas une ligne. Une ligne sentinelle obligerait à la créer
 pour chaque inscrit, à interdire sa suppression, et à l'exclure à l'écriture de
-l'OPML — les lecteurs sortant les flux non classés à la racine.
+l'OPML — les lecteurs sortant les flux non classés à la racine. C'est aussi
+pourquoi « Uncategorized » n'est pas cliquable dans la sidebar, là où un dossier
+mène à `/app?folder_id=` : il n'y a pas d'identifiant sur lequel filtrer.
+
+Supprimer un dossier ne désabonne jamais (`ON DELETE SET NULL`) : ses flux
+repassent simplement non classés. `Folders.Get` sert de garde d'appartenance
+avant `Subscriptions.SetFolder` — plier cette vérification dans une sous-requête
+de l'`UPDATE` écrirait `NULL` quand le dossier appartient à quelqu'un d'autre,
+déclassant l'abonnement au lieu de refuser l'écriture.
 
 ```sql
 id         BIGINT PRIMARY KEY
