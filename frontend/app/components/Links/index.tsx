@@ -16,6 +16,7 @@ import { formatDate } from "~/utils/formatDate";
 import { Link, useSearchParams } from "react-router";
 import { apiFetch } from "~/lib/api";
 import { useSubscriptions } from "~/lib/feeds";
+import { useFolders } from "~/lib/folders";
 import { useUpdateLink } from "~/lib/links";
 
 const FILTERS = [
@@ -60,18 +61,20 @@ function readScope(searchParams: URLSearchParams): Scope {
 
 function useScopeLabel(scope: Scope): string | null {
   const { data } = useSubscriptions({ enabled: scope.key !== "all" });
+  // Read from the folders themselves rather than from the subscriptions: an
+  // empty folder has no subscription to carry its name.
+  const { data: foldersData } = useFolders();
 
   if (scope.key === "all") return null;
 
-  const subscriptions = data?.subscriptions ?? [];
-
   if (scope.feedId !== null) {
+    const subscriptions = data?.subscriptions ?? [];
     const match = subscriptions.find((s) => s.feed.id === scope.feedId);
     return match?.custom_title || match?.feed.title || "This feed";
   }
 
-  const match = subscriptions.find((s) => s.folder?.id === scope.folderId);
-  return match?.folder?.name ?? "This folder";
+  const folder = foldersData?.folders.find((f) => f.id === scope.folderId);
+  return folder?.name ?? "This folder";
 }
 
 export const Links = () => {

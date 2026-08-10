@@ -1,44 +1,33 @@
 import { Loader2, Rss, Trash2 } from "lucide-react";
 import { Link } from "react-router";
 
+import Select from "~/components/Select";
 import { useSubscriptions, useUnsubscribe } from "~/lib/feeds";
-import type { Subscription } from "~/types/subscription";
+import { useFolders, useSetSubscriptionFolder } from "~/lib/folders";
+import type { Folder, Subscription } from "~/types/subscription";
 
-const UNFILED = "Uncategorized";
+const NO_FOLDER = { id: "none", title: "No folder", folderId: null } as const;
 
-type Group = {
-  folderId: number | null;
-  name: string;
-  subscriptions: Subscription[];
-};
+type FolderOption = { id: string; title: string; folderId: number | null };
 
-/**
- * Groups subscriptions by folder, alphabetically, with the unfiled ones last.
- */
-function groupByFolder(subscriptions: Subscription[]): Group[] {
-  const groups = new Map<string, Group>();
-
-  for (const sub of subscriptions) {
-    const name = sub.folder?.name ?? UNFILED;
-
-    let group = groups.get(name);
-    if (!group) {
-      group = { folderId: sub.folder?.id ?? null, name, subscriptions: [] };
-      groups.set(name, group);
-    }
-    group.subscriptions.push(sub);
-  }
-
-  return [...groups.values()].sort((a, b) => {
-    if (a.folderId === null) return 1;
-    if (b.folderId === null) return -1;
-    return a.name.localeCompare(b.name);
-  });
+function folderOptions(folders: Folder[]): FolderOption[] {
+  return [
+    NO_FOLDER,
+    ...folders.map((folder) => ({
+      id: String(folder.id),
+      title: folder.name,
+      folderId: folder.id,
+    })),
+  ];
 }
 
 const SubscriptionList = () => {
   const { data, isPending, isError } = useSubscriptions();
   const unsubscribe = useUnsubscribe();
+  const { data: foldersData } = useFolders();
+  const setFolder = useSetSubscriptionFolder();
+
+  const options = folderOptions(foldersData?.folders ?? []);
 
   if (isPending) {
     return (
@@ -66,59 +55,46 @@ const SubscriptionList = () => {
     );
   }
 
-  const groups = groupByFolder(subscriptions);
-  const showHeaders = groups.length > 1 || groups[0].folderId !== null;
-
   return (
-    <div className="mt-10 mx-auto max-w-126 flex flex-col gap-6">
-      {groups.map((group) => (
-        <section key={group.name}>
-          {showHeaders && (
-            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-              {group.folderId !== null ? (
-                <Link
-                  to={`/app?folder_id=${group.folderId}`}
-                  className="transition-colors hover:text-[#0084FF]"
-                >
-                  {group.name}
-                </Link>
-              ) : (
-                group.name
-              )}
-            </h2>
-          )}
-
-          <ul className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
-            {group.subscriptions.map((sub) => (
-              <SubscriptionRow
-                key={sub.id}
-                subscription={sub}
-                onUnsubscribe={() => unsubscribe.mutate(sub.id)}
-                isRemoving={
-                  unsubscribe.isPending && unsubscribe.variables === sub.id
-                }
-              />
-            ))}
-          </ul>
-        </section>
-      ))}
+    <div className="mt-10 mx-auto max-w-126">
+      <ul className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
+        {subscriptions.map((sub) => (
+          <SubscriptionRow
+            key={sub.id}
+            subscription={sub}
+            options={options}
+            onMove={(folderId) => setFolder.mutate({ id: sub.id, folderId })}
+            onUnsubscribe={() => unsubscribe.mutate(sub.id)}
+            isRemoving={
+              unsubscribe.isPending && unsubscribe.variables === sub.id
+            }
+          />
+        ))}
+      </ul>
     </div>
   );
 };
 
 type SubscriptionRowProps = {
   subscription: Subscription;
+  options: FolderOption[];
+  onMove: (folderId: number | null) => void;
   onUnsubscribe: () => void;
   isRemoving: boolean;
 };
 
 const SubscriptionRow = ({
   subscription,
+  options,
+  onMove,
   onUnsubscribe,
   isRemoving,
 }: SubscriptionRowProps) => {
-  const { feed, custom_title, unread_count } = subscription;
+  const { feed, custom_title, unread_count, folder } = subscription;
   const title = custom_title || feed.title || feed.url;
+  const current =
+    options.find((option) => option.folderId === (folder?.id ?? null)) ??
+    options[0];
 
   return (
     <li className="flex items-center gap-4 py-4">
@@ -162,6 +138,14 @@ const SubscriptionRow = ({
           {unread_count}
         </span>
       )}
+
+      <Select
+        className="shrink-0 w-40 max-md:w-32"
+        small
+        items={options}
+        value={current}
+        onChange={(option: FolderOption) => onMove(option.folderId)}
+      />
 
       <button
         type="button"
