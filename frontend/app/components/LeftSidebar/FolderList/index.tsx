@@ -4,20 +4,35 @@ import { Link } from "react-router";
 import {
   ChevronDown,
   ChevronRight,
-  CirclePlus,
   Folder as FolderIcon,
+  FolderPlus,
   Inbox,
   Loader2,
   Pencil,
+  Plus,
   Rss,
   Trash2,
 } from "lucide-react";
 
 import Modal from "~/components/Modal";
 import AddFolderList from "~/components/AddFolderList";
-import { useDeleteFolder, useFolders } from "~/lib/folders";
-import { useSubscriptions } from "~/lib/feeds";
+import ContextMenu, {
+  type ContextMenuItem,
+  type ContextMenuPosition,
+} from "~/components/ContextMenu";
+import {
+  useDeleteFolder,
+  useFolders,
+  useSetSubscriptionFolder,
+} from "~/lib/folders";
+import { useSubscriptions, useUnsubscribe } from "~/lib/feeds";
 import type { Folder, Subscription } from "~/types/subscription";
+
+type MenuTarget =
+  | { kind: "folder"; folder: Folder | null }
+  | { kind: "feed"; subscription: Subscription };
+
+type MenuState = { position: ContextMenuPosition; target: MenuTarget };
 
 const UNFILED_ID = "unfiled";
 
@@ -82,10 +97,13 @@ type FolderListProps = {
 const FolderList = ({ visible }: FolderListProps) => {
   const [visibleModal, setVisibleModal] = useState<boolean>(false);
   const [editing, setEditing] = useState<Folder | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   const foldersQuery = useFolders();
   const subscriptionsQuery = useSubscriptions();
   const deleteFolder = useDeleteFolder();
+  const setFolder = useSetSubscriptionFolder();
+  const unsubscribe = useUnsubscribe();
 
   const isPending = foldersQuery.isPending || subscriptionsQuery.isPending;
   const isError = foldersQuery.isError || subscriptionsQuery.isError;
@@ -114,9 +132,107 @@ const FolderList = ({ visible }: FolderListProps) => {
     }
   };
 
+  const onUnsubscribe = (subscription: Subscription) => {
+    const confirmed = window.confirm(
+      `Unsubscribe from "${subscriptionTitle(subscription)}"? The articles you already saved stay in your library.`,
+    );
+    if (confirmed) {
+      unsubscribe.mutate(subscription.id);
+    }
+  };
+
+  const openFolderMenu = (event: React.MouseEvent, folder: Folder | null) => {
+    event.preventDefault();
+    setMenu({
+      position: { x: event.clientX, y: event.clientY },
+      target: { kind: "folder", folder },
+    });
+  };
+
+  const openFeedMenu = (event: React.MouseEvent, subscription: Subscription) => {
+    event.preventDefault();
+    setMenu({
+      position: { x: event.clientX, y: event.clientY },
+      target: { kind: "feed", subscription },
+    });
+  };
+
+  const folders = foldersQuery.data?.folders ?? [];
+
+  const menuItems: ContextMenuItem[] = (() => {
+    if (!menu) return [];
+
+    if (menu.target.kind === "folder") {
+      const { folder } = menu.target;
+
+      // The unfiled group is not a row in the table: it can only offer the
+      // action that does not need an id.
+      if (!folder) {
+        return [
+          { label: "New folder", icon: FolderPlus, onSelect: openCreate },
+        ];
+      }
+
+      return [
+        { label: "Rename", icon: Pencil, onSelect: () => openRename(folder) },
+        {
+          label: "Delete",
+          icon: Trash2,
+          danger: true,
+          onSelect: () => onDelete(folder),
+        },
+        { type: "separator" },
+        { label: "New folder", icon: FolderPlus, onSelect: openCreate },
+      ];
+    }
+
+    const { subscription } = menu.target;
+    const currentFolderID = subscription.folder?.id ?? null;
+
+    return [
+      { type: "label", label: "Move to" },
+      ...folders.map((folder) => ({
+        label: folder.name,
+        icon: FolderIcon,
+        selected: folder.id === currentFolderID,
+        onSelect: () =>
+          setFolder.mutate({ id: subscription.id, folderId: folder.id }),
+      })),
+      {
+        label: "No folder",
+        icon: Inbox,
+        selected: currentFolderID === null,
+        onSelect: () => setFolder.mutate({ id: subscription.id, folderId: null }),
+      },
+      { type: "separator" },
+      {
+        label: "Unsubscribe",
+        icon: Trash2,
+        danger: true,
+        onSelect: () => onUnsubscribe(subscription),
+      },
+    ];
+  })();
+
   return (
     <>
       <div className="flex flex-col min-h-0 grow pb-6">
+        {/* Above the list, not under it: pinned there it keeps its place
+            however many folders are expanded. */}
+        <button
+          type="button"
+          aria-label="New folder"
+          onClick={openCreate}
+          className={`group flex shrink-0 items-center w-full h-10 mb-2 rounded-lg caption1 font-semibold text-n-4 transition-colors hover:cursor-pointer hover:bg-n-6 hover:text-n-1 ${
+            visible ? "px-3" : "justify-center px-2"
+          }`}
+        >
+          <span className="flex justify-center items-center w-6 h-6 shrink-0 rounded-md bg-n-6 transition-colors group-hover:bg-n-5">
+            <Plus size={14} />
+          </span>
+          {visible && <span className="ml-3">New folder</span>}
+        </button>
+
         <div
           className={`min-h-0 grow overflow-y-auto scroll-smooth scrollbar-none ${
             !visible && "px-2"
@@ -143,21 +259,18 @@ const FolderList = ({ visible }: FolderListProps) => {
               key={group.key}
               group={group}
               visible={visible}
-              onRename={openRename}
-              onDelete={onDelete}
+              onFolderMenu={openFolderMenu}
+              onFeedMenu={openFeedMenu}
             />
           ))}
         </div>
-        <button
-          className={`group flex shrink-0 items-center w-full h-12 text-left base2 text-n-3/75 transition-colors hover:cursor-pointer hover:text-n-3 ${
-            visible ? "px-5" : "justify-center px-3"
-          }`}
-          onClick={openCreate}
-        >
-          <CirclePlus className="text-n-4 transition-colors group-hover:text-n-3" />
-          {visible && <div className="ml-5">New folder</div>}
-        </button>
       </div>
+
+      <ContextMenu
+        position={menu?.position ?? null}
+        items={menuItems}
+        onClose={() => setMenu(null)}
+      />
       <Modal
         className="max-md:p-0!"
         classWrap="max-w-160 max-md:min-h-dvh max-md:rounded-none max-md:pb-8"
@@ -178,11 +291,16 @@ const FolderList = ({ visible }: FolderListProps) => {
 type FolderRowProps = {
   group: Group;
   visible?: boolean;
-  onRename: (folder: Folder) => void;
-  onDelete: (folder: Folder) => void;
+  onFolderMenu: (event: React.MouseEvent, folder: Folder | null) => void;
+  onFeedMenu: (event: React.MouseEvent, subscription: Subscription) => void;
 };
 
-const FolderRow = ({ group, visible, onRename, onDelete }: FolderRowProps) => {
+const FolderRow = ({
+  group,
+  visible,
+  onFolderMenu,
+  onFeedMenu,
+}: FolderRowProps) => {
   const Icon = group.folder ? FolderIcon : Inbox;
 
   // Collapsed, there is no room for a tree: a folder becomes a filter link.
@@ -194,6 +312,7 @@ const FolderRow = ({ group, visible, onRename, onDelete }: FolderRowProps) => {
       <Link
         to={`/app?folder_id=${group.folder.id}`}
         title={group.name}
+        onContextMenu={(event) => onFolderMenu(event, group.folder)}
         className="flex justify-center items-center w-full h-12 rounded-lg text-n-3/75 transition-colors hover:text-n-1"
       >
         <Icon size={20} />
@@ -208,7 +327,10 @@ const FolderRow = ({ group, visible, onRename, onDelete }: FolderRowProps) => {
           {/* The folder name links to its filtered article list, so it sits
               beside the toggle rather than inside it: an anchor nested in a
               button is invalid HTML. */}
-          <div className="group flex items-center w-full h-12 pl-3 pr-2 rounded-lg text-n-3/75 base2 font-semibold transition-colors hover:text-n-1">
+          <div
+            onContextMenu={(event) => onFolderMenu(event, group.folder)}
+            className="flex items-center w-full h-12 pl-3 pr-2 rounded-lg text-n-3/75 base2 font-semibold transition-colors hover:text-n-1"
+          >
             <DisclosureButton
               aria-label={open ? `Collapse ${group.name}` : `Expand ${group.name}`}
               className="flex justify-center items-center w-6 h-6 shrink-0 text-n-4 transition-colors hover:cursor-pointer hover:text-n-3"
@@ -224,33 +346,8 @@ const FolderRow = ({ group, visible, onRename, onDelete }: FolderRowProps) => {
               <span className="ml-3 truncate">{group.name}</span>
             )}
 
-            {group.folder && (
-              <div className="ml-auto flex items-center opacity-0 transition-opacity group-hover:opacity-100">
-                <button
-                  type="button"
-                  aria-label={`Rename ${group.name}`}
-                  onClick={() => onRename(group.folder!)}
-                  className="p-1 rounded text-n-4 transition-colors hover:cursor-pointer hover:text-n-1"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Delete ${group.name}`}
-                  onClick={() => onDelete(group.folder!)}
-                  className="p-1 rounded text-n-4 transition-colors hover:cursor-pointer hover:text-red-500"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            )}
-
             {group.unread > 0 && (
-              <div
-                className={`px-2 bg-n-6 rounded-lg base2 font-semibold text-n-4 ${
-                  group.folder ? "ml-2 group-hover:hidden" : "ml-auto"
-                }`}
-              >
+              <div className="ml-auto px-2 bg-n-6 rounded-lg base2 font-semibold text-n-4">
                 {group.unread}
               </div>
             )}
@@ -261,7 +358,7 @@ const FolderRow = ({ group, visible, onRename, onDelete }: FolderRowProps) => {
               <div className="pl-14 py-2 caption1 text-n-4/75">No feeds yet.</div>
             ) : (
               group.subscriptions.map((sub) => (
-                <FeedRow key={sub.id} subscription={sub} />
+                <FeedRow key={sub.id} subscription={sub} onMenu={onFeedMenu} />
               ))
             )}
           </DisclosurePanel>
@@ -271,13 +368,19 @@ const FolderRow = ({ group, visible, onRename, onDelete }: FolderRowProps) => {
   );
 };
 
-const FeedRow = ({ subscription }: { subscription: Subscription }) => {
+type FeedRowProps = {
+  subscription: Subscription;
+  onMenu: (event: React.MouseEvent, subscription: Subscription) => void;
+};
+
+const FeedRow = ({ subscription, onMenu }: FeedRowProps) => {
   const { feed, unread_count } = subscription;
   const title = subscriptionTitle(subscription);
 
   return (
     <Link
       to={`/app?feed_id=${feed.id}`}
+      onContextMenu={(event) => onMenu(event, subscription)}
       className="flex items-center w-full h-10 pl-11 pr-2 rounded-lg text-n-3/60 caption1 transition-colors hover:text-n-1"
     >
       {feed.image_url ? (
