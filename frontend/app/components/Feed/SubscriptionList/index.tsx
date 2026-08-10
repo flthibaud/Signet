@@ -117,7 +117,7 @@ const SubscriptionRow = ({
       <div className="flex-1 min-w-0">
         <Link
           to={`/app?feed_id=${feed.id}`}
-          className="block font-semibold text-gray-900 dark:text-white truncate transition-colors hover:text-[#0084FF]"
+          className="block font-semibold text-gray-900 dark:text-white truncate transition-colors hover:text-primary-1"
         >
           {title}
         </Link>
@@ -134,7 +134,7 @@ const SubscriptionRow = ({
       </div>
 
       {unread_count > 0 && (
-        <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-[#0084FF]/10 text-[#0084FF]">
+        <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-primary-1/10 text-primary-1">
           {unread_count}
         </span>
       )}

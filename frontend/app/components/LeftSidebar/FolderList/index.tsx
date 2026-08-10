@@ -117,47 +117,37 @@ const FolderList = ({ visible }: FolderListProps) => {
   return (
     <>
       <div className="flex flex-col min-h-0 grow pb-6">
-        <Disclosure defaultOpen={true} as="div" className="flex flex-col min-h-0">
-          <DisclosureButton
-            className={`group flex shrink-0 items-center w-full h-12 text-left base2 text-n-4/75 transition-colors hover:cursor-pointer hover:text-n-3 ${
-              visible ? "px-5" : "justify-center px-3"
-            }`}
-          >
-            <ChevronDown className="text-n-4 transition-transform group-data-open:rotate-180" />
-            {visible && <div className="ml-5">Folders</div>}
-          </DisclosureButton>
-          <DisclosurePanel
-            className={`min-h-0 grow overflow-y-auto scroll-smooth scrollbar-none ${
-              !visible && "px-2"
-            }`}
-          >
-            {isPending && (
-              <div className="flex items-center justify-center h-12">
-                <Loader2 size={16} className="animate-spin text-n-4" />
-              </div>
-            )}
+        <div
+          className={`min-h-0 grow overflow-y-auto scroll-smooth scrollbar-none ${
+            !visible && "px-2"
+          }`}
+        >
+          {isPending && (
+            <div className="flex items-center justify-center h-12">
+              <Loader2 size={16} className="animate-spin text-n-4" />
+            </div>
+          )}
 
-            {isError && visible && (
-              <div className="px-5 py-3 caption1 text-n-4">
-                Your folders could not be loaded.
-              </div>
-            )}
+          {isError && visible && (
+            <div className="px-5 py-3 caption1 text-n-4">
+              Your folders could not be loaded.
+            </div>
+          )}
 
-            {!isPending && !isError && groups.length === 0 && visible && (
-              <div className="px-5 py-3 caption1 text-n-4">No folders yet.</div>
-            )}
+          {!isPending && !isError && groups.length === 0 && visible && (
+            <div className="px-5 py-3 caption1 text-n-4">No folders yet.</div>
+          )}
 
-            {groups.map((group) => (
-              <FolderRow
-                key={group.key}
-                group={group}
-                visible={visible}
-                onRename={openRename}
-                onDelete={onDelete}
-              />
-            ))}
-          </DisclosurePanel>
-        </Disclosure>
+          {groups.map((group) => (
+            <FolderRow
+              key={group.key}
+              group={group}
+              visible={visible}
+              onRename={openRename}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
         <button
           className={`group flex shrink-0 items-center w-full h-12 text-left base2 text-n-3/75 transition-colors hover:cursor-pointer hover:text-n-3 ${
             visible ? "px-5" : "justify-center px-3"
