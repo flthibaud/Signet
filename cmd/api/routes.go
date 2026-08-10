@@ -30,7 +30,14 @@ func (app *application) routes() http.Handler {
 	// Subscriptions
 	router.HandlerFunc(http.MethodGet, "/v1/subscriptions", app.listSubscriptionsHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/subscriptions", app.createSubscriptionHandler)
+	router.HandlerFunc(http.MethodPatch, "/v1/subscriptions/:id", app.updateSubscriptionHandler)
 	router.HandlerFunc(http.MethodDelete, "/v1/subscriptions/:id", app.deleteSubscriptionHandler)
+
+	// Folders
+	router.HandlerFunc(http.MethodGet, "/v1/folders", app.listFoldersHandler)
+	router.HandlerFunc(http.MethodPost, "/v1/folders", app.createFolderHandler)
+	router.HandlerFunc(http.MethodPatch, "/v1/folders/:id", app.updateFolderHandler)
+	router.HandlerFunc(http.MethodDelete, "/v1/folders/:id", app.deleteFolderHandler)
 
 	router.HandlerFunc(http.MethodPost, "/v1/opml/import", app.importOPMLHandler)
 	router.HandlerFunc(http.MethodGet, "/v1/opml/imports/latest", app.latestOPMLImportHandler)
