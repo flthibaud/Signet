@@ -28,3 +28,7 @@ export interface Subscription {
 export interface SubscriptionsResponse {
   subscriptions: Subscription[];
 }
+
+export interface FoldersResponse {
+  folders: Folder[];
+}

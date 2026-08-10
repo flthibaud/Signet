@@ -17,8 +17,6 @@ import {
 } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 
-import { folderList } from "~/mocks/folderList";
-
 type LeftSidebarProps = {
   isCollapsed: boolean;
   setIsCollapsed?: React.Dispatch<React.SetStateAction<boolean>>;
@@ -96,14 +94,16 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
             )}
           </button>
         </div>
-        <div className="grow overflow-y-auto scroll-smooth scrollbar-none">
+        {/* Navigation and the "New folder" button stay put; the folder tree is
+            the only thing that scrolls, however long it gets. */}
+        <div className="flex flex-col grow min-h-0">
           <Navigation visible={!isCollapsed} items={navigation} />
           <div
-            className={`my-4 h-px bg-n-6 ${
+            className={`shrink-0 my-4 h-px bg-n-6 ${
               isCollapsed ? "-mx-4 max-md:mx-0" : "-mx-2 max-md:mx-0"
             }`}
           ></div>
-          <FolderList visible={!isCollapsed} items={folderList} />
+          <FolderList visible={!isCollapsed} />
         </div>
         <div className="absolute left-0 bottom-0 right-0 pb-6 px-4 bg-n-7 before:absolute before:left-0 before:right-0 before:bottom-full before:h-10 before:bg-linear-to-t before:from-[#131617] before:to-[rgba(19,22,23,0)] before:pointer-events-none max-md:px-3">
           <Profile visible={!isCollapsed} />
