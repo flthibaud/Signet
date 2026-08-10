@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -181,5 +182,164 @@ func TestListForUserFolderFilter(t *testing.T) {
 	}
 	if len(links) != 0 {
 		t.Errorf("got %d links for another user's folder, want none", len(links))
+	}
+}
+
+func TestFolderGet(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	model := FolderModel{DB: db}
+	userID := seedUser(t, db)
+	other := seedUser(t, db)
+
+	folderID := seedFolder(t, db, userID, "Tech")
+
+	folder, err := model.Get(ctx, userID, folderID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if folder.Name != "Tech" || folder.UserID != userID || folder.CreatedAt.IsZero() {
+		t.Errorf("unexpected folder: %+v", folder)
+	}
+
+	// The folder exists, but not for this user.
+	if _, err := model.Get(ctx, other, folderID); !errors.Is(err, ErrRecordNotFound) {
+		t.Errorf("Get for another user: got %v, want ErrRecordNotFound", err)
+	}
+}
+
+func TestFolderInsert(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	model := FolderModel{DB: db}
+	userID := seedUser(t, db)
+	other := seedUser(t, db)
+
+	folder := &Folder{UserID: userID, Name: "Tech"}
+	if err := model.Insert(ctx, folder); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if folder.ID == 0 || folder.CreatedAt.IsZero() {
+		t.Errorf("Insert did not fill in the generated columns: %+v", folder)
+	}
+
+	dup := &Folder{UserID: userID, Name: "Tech"}
+	if err := model.Insert(ctx, dup); !errors.Is(err, ErrDuplicateFolder) {
+		t.Errorf("inserting a duplicate: got %v, want ErrDuplicateFolder", err)
+	}
+
+	// Uniqueness is per user, not global.
+	sameName := &Folder{UserID: other, Name: "Tech"}
+	if err := model.Insert(ctx, sameName); err != nil {
+		t.Errorf("another user could not reuse the name: %v", err)
+	}
+}
+
+func TestFolderUpdate(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	model := FolderModel{DB: db}
+	userID := seedUser(t, db)
+	other := seedUser(t, db)
+
+	folderID := seedFolder(t, db, userID, "Tech")
+	seedFolder(t, db, userID, "Dev")
+
+	if err := model.Update(ctx, userID, folderID, "Technology"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	folder, err := model.Get(ctx, userID, folderID)
+	if err != nil {
+		t.Fatalf("Get after Update: %v", err)
+	}
+	if folder.Name != "Technology" {
+		t.Errorf("name = %q, want %q", folder.Name, "Technology")
+	}
+
+	if err := model.Update(ctx, userID, folderID, "Dev"); !errors.Is(err, ErrDuplicateFolder) {
+		t.Errorf("renaming onto an existing name: got %v, want ErrDuplicateFolder", err)
+	}
+
+	if err := model.Update(ctx, other, folderID, "Mine now"); !errors.Is(err, ErrRecordNotFound) {
+		t.Errorf("renaming another user's folder: got %v, want ErrRecordNotFound", err)
+	}
+}
+
+// TestFolderDelete pins the behaviour the ON DELETE SET NULL was chosen for:
+// deleting a folder unfiles its subscriptions rather than unsubscribing.
+func TestFolderDelete(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	model := FolderModel{DB: db}
+	userID := seedUser(t, db)
+	other := seedUser(t, db)
+
+	folderID := seedFolder(t, db, userID, "Tech")
+	feedID := seedFeed(t, db, "Korben", "")
+	subID := seedSubscription(t, db, userID, feedID, &folderID)
+
+	if err := model.Delete(ctx, other, folderID); !errors.Is(err, ErrRecordNotFound) {
+		t.Errorf("deleting another user's folder: got %v, want ErrRecordNotFound", err)
+	}
+
+	if err := model.Delete(ctx, userID, folderID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	var storedFolder *int64
+	err := db.QueryRowContext(ctx, `SELECT folder_id FROM subscriptions WHERE id = $1`, subID).Scan(&storedFolder)
+	if err != nil {
+		t.Fatalf("the subscription did not survive its folder: %v", err)
+	}
+	if storedFolder != nil {
+		t.Errorf("folder_id = %d, want NULL", *storedFolder)
+	}
+
+	if err := model.Delete(ctx, userID, folderID); !errors.Is(err, ErrRecordNotFound) {
+		t.Errorf("deleting twice: got %v, want ErrRecordNotFound", err)
+	}
+}
+
+func TestSubscriptionSetFolder(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	model := SubscriptionModel{DB: db}
+	userID := seedUser(t, db)
+	other := seedUser(t, db)
+
+	folderID := seedFolder(t, db, userID, "Tech")
+	feedID := seedFeed(t, db, "Korben", "")
+	subID := seedSubscription(t, db, userID, feedID, nil)
+
+	readBack := func() *int64 {
+		t.Helper()
+		var stored *int64
+		if err := db.QueryRowContext(ctx, `SELECT folder_id FROM subscriptions WHERE id = $1`, subID).Scan(&stored); err != nil {
+			t.Fatalf("reading back the subscription: %v", err)
+		}
+		return stored
+	}
+
+	if err := model.SetFolder(ctx, userID, subID, &folderID); err != nil {
+		t.Fatalf("SetFolder: %v", err)
+	}
+	if stored := readBack(); stored == nil || *stored != folderID {
+		t.Errorf("folder_id = %v, want %d", stored, folderID)
+	}
+
+	if err := model.SetFolder(ctx, userID, subID, nil); err != nil {
+		t.Fatalf("SetFolder(nil): %v", err)
+	}
+	if stored := readBack(); stored != nil {
+		t.Errorf("folder_id = %d, want NULL", *stored)
+	}
+
+	if err := model.SetFolder(ctx, other, subID, &folderID); !errors.Is(err, ErrRecordNotFound) {
+		t.Errorf("filing another user's subscription: got %v, want ErrRecordNotFound", err)
 	}
 }
