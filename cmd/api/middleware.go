@@ -290,6 +290,7 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 var publicAPIRoutes = map[string]struct{}{
 	http.MethodGet + " /v1/healthcheck":              {},
 	http.MethodGet + " /v1/readiness":                {},
+	http.MethodGet + " /v1/config":                   {},
 	http.MethodPost + " /v1/users":                   {},
 	http.MethodPost + " /v1/tokens/authentication":   {},
 	http.MethodDelete + " /v1/tokens/authentication": {},

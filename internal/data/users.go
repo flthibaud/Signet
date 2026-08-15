@@ -317,6 +317,23 @@ func (m UserModel) Insert(user *User) error {
 	return nil
 }
 
+// HasAny reports whether the instance has at least one account. It backs the
+// bootstrap exception to REGISTRATION_ENABLED: registration stays open while
+// there is nobody to close it for.
+func (m UserModel) HasAny() (bool, error) {
+	query := `SELECT EXISTS (SELECT 1 FROM users)`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var exists bool
+	if err := m.DB.QueryRowContext(ctx, query).Scan(&exists); err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
 // Update writes user's username, email and password hash back to its row.
 // Returns ErrDuplicateEmail or ErrDuplicateUsername on a collision, and
 // ErrEditConflict if the row no longer exists.

@@ -9,6 +9,19 @@ import (
 )
 
 func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Request) {
+	// The gate comes before anything else for the same reason the password is
+	// validated before it is hashed, below: a rejected caller must not cost a
+	// bcrypt round.
+	open, err := app.registrationOpen()
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+		return
+	}
+	if !open {
+		app.registrationClosedResponse(w, r)
+		return
+	}
+
 	// Create an anonymous struct to hold the expected data from the request body.
 	var input struct {
 		Username string `json:"username"`
@@ -17,7 +30,7 @@ func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Parse the request body into the anonymous struct.
-	err := app.readJSON(w, r, &input)
+	err = app.readJSON(w, r, &input)
 	if err != nil {
 		app.badRequestResponse(w, r, err)
 		return
@@ -74,6 +87,23 @@ func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}
+}
+
+// registrationOpen reports whether a new account may be created. A closed
+// instance still lets the very first one through: there is no CLI to create a
+// user with, so an install started with the default — closed — would otherwise
+// be locked out of itself.
+func (app *application) registrationOpen() (bool, error) {
+	if app.config.registrationEnabled {
+		return true, nil
+	}
+
+	hasUsers, err := app.models.Users.HasAny()
+	if err != nil {
+		return false, err
+	}
+
+	return !hasUsers, nil
 }
 
 func (app *application) getCurrentUserHandler(w http.ResponseWriter, r *http.Request) {

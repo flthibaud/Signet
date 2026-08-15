@@ -23,6 +23,7 @@ var configKeys = []string{
 	"SCHEDULER_BATCH_SIZE",
 	"HSTS_MAX_AGE",
 	"SESSION_TTL",
+	"REGISTRATION_ENABLED",
 	"TLS_IMPERSONATE_ENABLED",
 	"SOLVER_URL",
 	"SOLVER_TIMEOUT",
@@ -70,6 +71,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		{"scheduler.batchSize", cfg.scheduler.batchSize, 50},
 		{"hstsMaxAge", cfg.hstsMaxAge, 31536000},
 		{"sessionTTL", cfg.sessionTTL, 30 * 24 * time.Hour},
+		{"registrationEnabled", cfg.registrationEnabled, false},
 		{"fetch.TLSImpersonate", cfg.fetch.TLSImpersonate, true},
 		{"fetch.SolverURL", cfg.fetch.SolverURL, ""},
 		{"fetch.SolverTimeout", cfg.fetch.SolverTimeout, time.Duration(0)},
@@ -99,6 +101,7 @@ func TestLoadConfigReadsEnvironment(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_COUNT", "1")
 	t.Setenv("SESSION_TTL", "168h")
 	t.Setenv("HSTS_MAX_AGE", "0")
+	t.Setenv("REGISTRATION_ENABLED", "true")
 	t.Setenv("FETCH_ALLOW_PRIVATE_NETWORKS", "true")
 	t.Setenv("AUTO_MIGRATE", "false")
 
@@ -120,6 +123,7 @@ func TestLoadConfigReadsEnvironment(t *testing.T) {
 		{"sessionTTL", cfg.sessionTTL, 168 * time.Hour},
 		// 0 disables HSTS and must survive as 0, not fall back to the default.
 		{"hstsMaxAge", cfg.hstsMaxAge, 0},
+		{"registrationEnabled", cfg.registrationEnabled, true},
 		{"fetch.AllowPrivateNetworks", cfg.fetch.AllowPrivateNetworks, true},
 		{"db.autoMigrate", cfg.db.autoMigrate, false},
 	}

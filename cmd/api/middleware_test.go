@@ -303,6 +303,9 @@ func TestRequireAuthenticatedUserAllowsPublicAPIRoutes(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/v1/healthcheck"},
 		{http.MethodGet, "/v1/readiness"},
+		// The SPA reads it to decide whether to offer a sign-up form, which it
+		// has to do before anyone can have a token.
+		{http.MethodGet, "/v1/config"},
 		{http.MethodPost, "/v1/users"},
 		{http.MethodPost, "/v1/tokens/authentication"},
 		// Logout must work with a stale cookie, otherwise the browser keeps it.
