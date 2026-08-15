@@ -3,6 +3,7 @@ import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
 import SignIn from "./SignIn";
 import CreateAccount from "./CreateAccount";
 import ForgotPassword from "./ForgotPassword";
+import { useAppConfig } from "~/lib/config";
 
 const tabNav = ["Sign in", "Create account"];
 
@@ -13,6 +14,12 @@ const Form = () => {
   const [forgot, setForgot] = useState<boolean>(false);
   const [selectedIndex, setSelectedIndex] = useState<number>(SIGN_IN_TAB);
   const [notice, setNotice] = useState<string | null>(null);
+  const { data } = useAppConfig();
+
+  // Only once the config has answered, so a closed instance never flashes a
+  // sign-up tab it is about to take away. Until then the sign-in form stands
+  // on its own, which is what the tab bar would have selected anyway.
+  const canRegister = data?.config.registration_enabled ?? false;
 
   const handleTabChange = (index: number) => {
     setSelectedIndex(index);
@@ -29,7 +36,7 @@ const Form = () => {
     <div className="w-full max-w-126 m-auto">
       {forgot ? (
         <ForgotPassword onClick={() => setForgot(false)} />
-      ) : (
+      ) : canRegister ? (
         <TabGroup selectedIndex={selectedIndex} onChange={handleTabChange}>
           <TabList className="flex mb-8 p-1 bg-[#F3F5F7] rounded-xl dark:bg-[#141718]">
             {tabNav.map((button, index) => (
@@ -50,6 +57,8 @@ const Form = () => {
             </TabPanel>
           </TabPanels>
         </TabGroup>
+      ) : (
+        <SignIn onForgotPassword={() => setForgot(true)} notice={notice} />
       )}
     </div>
   );
