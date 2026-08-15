@@ -2,6 +2,7 @@ package opml
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -251,5 +252,47 @@ func TestRoundTrip(t *testing.T) {
 		if index[want.XMLURL] != want {
 			t.Errorf("round trip changed %s:\n got %+v\nwant %+v", want.XMLURL, index[want.XMLURL], want)
 		}
+	}
+}
+
+// An uploaded file decides how deep UnmarshalXML recurses, so the parser caps
+// it rather than trusting the input.
+func TestParseRejectsDeepNesting(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString(`<opml version="2.0"><head><title>t</title></head><body>`)
+	depth := maxNestingDepth + 10
+	for range depth {
+		sb.WriteString(`<outline text="f">`)
+	}
+	sb.WriteString(`<outline text="a" xmlUrl="https://example.com/f.xml"/>`)
+	for range depth {
+		sb.WriteString(`</outline>`)
+	}
+	sb.WriteString(`</body></opml>`)
+
+	if _, err := Parse(strings.NewReader(sb.String())); !errors.Is(err, ErrTooDeep) {
+		t.Errorf("got %v, want ErrTooDeep", err)
+	}
+}
+
+// A tree within the cap still parses, so the guard cannot reject real files.
+func TestParseAcceptsNestingWithinCap(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString(`<opml version="2.0"><head><title>t</title></head><body>`)
+	for range maxNestingDepth - 1 {
+		sb.WriteString(`<outline text="f">`)
+	}
+	sb.WriteString(`<outline text="a" xmlUrl="https://example.com/f.xml"/>`)
+	for range maxNestingDepth - 1 {
+		sb.WriteString(`</outline>`)
+	}
+	sb.WriteString(`</body></opml>`)
+
+	entries, err := Parse(strings.NewReader(sb.String()))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
 	}
 }

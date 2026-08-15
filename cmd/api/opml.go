@@ -28,11 +28,14 @@ func (app *application) importOPMLHandler(w http.ResponseWriter, r *http.Request
 	entries, err := opml.Parse(r.Body)
 	if err != nil {
 		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
+		switch {
+		case errors.As(err, &maxBytesError):
 			app.badRequestResponse(w, r, fmt.Errorf("the file must not be larger than %d MB", maxOPMLBytes>>20))
-			return
+		case errors.Is(err, opml.ErrTooDeep):
+			app.badRequestResponse(w, r, errors.New("the file nests its folders too deeply"))
+		default:
+			app.badRequestResponse(w, r, errors.New("the file could not be read as OPML"))
 		}
-		app.badRequestResponse(w, r, errors.New("the file could not be read as OPML"))
 		return
 	}
 

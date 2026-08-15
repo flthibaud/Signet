@@ -3,6 +3,7 @@ package main
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/flthibaud/signet"
 	"github.com/julienschmidt/httprouter"
@@ -11,7 +12,6 @@ import (
 func (app *application) routes() http.Handler {
 	router := httprouter.New()
 
-	router.NotFound = http.HandlerFunc(app.notFoundResponse)
 	router.MethodNotAllowed = http.HandlerFunc(app.methodNotAllowedResponse)
 
 	// Liveness (process is up) and readiness (dependencies reachable) are
@@ -74,8 +74,17 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodGet, "/auth", app.requireGuest(spaIndex))
 	router.HandlerFunc(http.MethodGet, "/", app.requireGuest(spaIndex))
 
-	// Static assets (JS, CSS, images) served without auth checks
-	router.NotFound = fileServer
+	// Anything the router did not match is a static asset (JS, CSS, images),
+	// served without auth checks — except under the API prefix, where an unknown
+	// path is a client error and has to come back as the JSON error envelope
+	// rather than as the file server's plain-text 404.
+	router.NotFound = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, apiPrefix) {
+			app.notFoundResponse(w, r)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 
 	return app.secureHeaders(app.recoverPanic(app.rateLimit(app.authenticate(app.requireAuthenticatedUser(router)))))
 }

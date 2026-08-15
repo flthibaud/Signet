@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/flthibaud/signet/internal/validator"
@@ -43,6 +44,40 @@ var (
 	ErrEditConflict = errors.New("edit conflict")
 )
 
+// Unique indexes on users, matched by name when a write is refused.
+const (
+	userEmailConstraint    = "users_email_key"
+	userUsernameConstraint = "users_username_key"
+)
+
+// passwordHashCost is the bcrypt work factor. DecoyPasswordCheck derives its own
+// cost from this, so the two can never drift apart.
+const passwordHashCost = 12
+
+// decoyHash is a bcrypt digest of a value nobody can present, computed once on
+// first use. It exists only to be compared against.
+var decoyHash = sync.OnceValue(func() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("decoy"), passwordHashCost)
+	if err != nil {
+		// Only possible if the cost is out of range, which is a constant here.
+		panic("data: cannot compute the decoy password hash: " + err.Error())
+	}
+	return hash
+})
+
+// DecoyPasswordCheck spends the same CPU a real password comparison would,
+// without any user to compare against.
+//
+// Sign-in looks up the account first, so an unknown email would otherwise skip
+// bcrypt entirely and answer in microseconds where a known email takes the
+// ~250ms the hash costs. The response bodies are identical, but that gap is not:
+// it tells an attacker which addresses have accounts here, one request at a
+// time. Calling this on the not-found path makes both answers cost the same.
+func DecoyPasswordCheck(plaintextPassword string) {
+	// The comparison always fails; only its duration matters.
+	_ = bcrypt.CompareHashAndPassword(decoyHash(), []byte(plaintextPassword))
+}
+
 // Check if a User instance is the AnonymousUser.
 func (u *User) IsAnonymous() bool {
 	return u == AnonymousUser
@@ -51,7 +86,7 @@ func (u *User) IsAnonymous() bool {
 // The Set() method calculates the bcrypt hash of a plaintext password, and stores both
 // the hash and the plaintext versions in the struct.
 func (p *password) Set(plaintextPassword string) error {
-	hash, err := bcrypt.GenerateFromPassword([]byte(plaintextPassword), 12)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plaintextPassword), passwordHashCost)
 	if err != nil {
 		return err
 	}
@@ -236,9 +271,9 @@ func (m UserModel) Insert(user *User) error {
 	err := m.DB.QueryRowContext(ctx, query, args...).Scan(&user.ID, &user.CreatedAt)
 	if err != nil {
 		switch {
-		case err.Error() == `pq: duplicate key value violates unique constraint "users_email_key"`:
+		case isUniqueViolation(err, userEmailConstraint):
 			return ErrDuplicateEmail
-		case err.Error() == `pq: duplicate key value violates unique constraint "users_username_key"`:
+		case isUniqueViolation(err, userUsernameConstraint):
 			return ErrDuplicateUsername
 		default:
 			return err
@@ -269,9 +304,9 @@ func (m UserModel) Update(user *User) error {
 
 	if err != nil {
 		switch {
-		case err.Error() == `pq: duplicate key value violates unique constraint "users_email_key"`:
+		case isUniqueViolation(err, userEmailConstraint):
 			return ErrDuplicateEmail
-		case err.Error() == `pq: duplicate key value violates unique constraint "users_username_key"`:
+		case isUniqueViolation(err, userUsernameConstraint):
 			return ErrDuplicateUsername
 		case errors.Is(err, sql.ErrNoRows):
 			return ErrEditConflict
@@ -280,9 +315,5 @@ func (m UserModel) Update(user *User) error {
 		}
 	}
 
-	return nil
-}
-
-func (m UserModel) Delete(id int64) error {
 	return nil
 }

@@ -26,6 +26,19 @@ const FolderSeparator = " / "
 // maxFolderDepth bounds how many levels are folded into a name.
 const maxFolderDepth = 5
 
+// maxNestingDepth bounds how deep the outline tree may go before the rest of a
+// branch is discarded.
+//
+// UnmarshalXML recurses once per nested <outline>, and the file comes from an
+// upload: without a cap, the recursion depth is whatever the uploader chose to
+// write. Real subscription lists are two or three levels deep — anything past
+// this is not a folder hierarchy, so cutting the branch loses nothing a reader
+// would miss.
+const maxNestingDepth = 64
+
+// ErrTooDeep reports an outline tree nested past maxNestingDepth.
+var ErrTooDeep = errors.New("outline nesting is too deep")
+
 type document struct {
 	XMLName xml.Name `xml:"opml"`
 	Version string   `xml:"version,attr"`
@@ -52,6 +65,12 @@ type outline struct {
 
 // UnmarshalXML matches attributes case-insensitively.
 func (o *outline) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	return o.decode(d, start, 0)
+}
+
+// decode is UnmarshalXML with the nesting depth carried down, which the
+// xml.Unmarshaler signature has no room for.
+func (o *outline) decode(d *xml.Decoder, start xml.StartElement, depth int) error {
 	for _, attr := range start.Attr {
 		value := strings.TrimSpace(attr.Value)
 		switch {
@@ -87,8 +106,11 @@ func (o *outline) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 				}
 				continue
 			}
+			if depth >= maxNestingDepth {
+				return ErrTooDeep
+			}
 			var child outline
-			if err := child.UnmarshalXML(d, t); err != nil {
+			if err := child.decode(d, t, depth+1); err != nil {
 				return err
 			}
 			o.Children = append(o.Children, child)

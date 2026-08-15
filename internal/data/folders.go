@@ -11,9 +11,11 @@ import (
 
 var ErrDuplicateFolder = errors.New("duplicate folder")
 
+// folderNameConstraint is the unique index backing "one folder name per user".
+const folderNameConstraint = "folders_user_id_name_key"
+
 func duplicateFolderName(err error) bool {
-	return err != nil &&
-		err.Error() == `pq: duplicate key value violates unique constraint "folders_user_id_name_key"`
+	return isUniqueViolation(err, folderNameConstraint)
 }
 
 // Folder groups a user's subscriptions. Folders are flat:
