@@ -1,3 +1,16 @@
+// Command api is Signet's single binary: it serves the JSON API under /v1 and
+// the embedded React Router SPA on everything else, from one process and one
+// port.
+//
+// Startup order matters. Pending migrations are applied first, on a throwaway
+// connection (migrate.go), so the pool the rest of the wiring opens is against
+// the schema that wiring assumes. Configuration is read from the environment
+// through internal/env, which reports every bad value at once rather than one
+// per restart. Passing --migrate-only migrates and exits, for a PaaS release
+// command or a job run ahead of a multi-replica rollout.
+//
+// routes.go is the single source of truth for what this binary exposes,
+// middleware.go for the chain every request passes through.
 package main
 
 import (
@@ -71,6 +84,8 @@ func main() {
 
 	// 4. Init du scheduler
 	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)
+
+	services.OPMLService.SetSyncTrigger(scheduler)
 
 	app := &application{
 		config:    cfg,

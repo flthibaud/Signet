@@ -4,7 +4,7 @@
   "service": "app",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 
-  "forwardPorts": [8000, 5432],
+  "forwardPorts": [5173, 8000, 5432],
 
   "customizations": {
     "vscode": {

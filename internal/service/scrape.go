@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -61,6 +62,15 @@ type solveBudget struct {
 type solveBudgetKey struct{}
 
 func withSolveBudget(ctx context.Context, n int) context.Context {
+	// The budget is an int32, and SOLVER_MAX_PER_FEED is only range-checked for
+	// being non-negative. On a 64-bit build a value above math.MaxInt32 would
+	// wrap to a negative one, which takeSolve reads as an exhausted budget —
+	// asking for more solves would silently turn the browser fallback off
+	// entirely. Clamping keeps an absurd setting meaning "effectively no cap".
+	if n > math.MaxInt32 {
+		n = math.MaxInt32
+	}
+
 	b := &solveBudget{}
 	b.remaining.Store(int32(n))
 	return context.WithValue(ctx, solveBudgetKey{}, b)
@@ -204,6 +214,9 @@ type fetchStatusError struct {
 	url    string
 }
 
+// Error renders the status and the URL that produced it. The type is exported
+// through errors.As so the escalation ladder can branch on the status rather
+// than on the message.
 func (e *fetchStatusError) Error() string {
 	return "fetch " + e.url + ": status " + strconv.Itoa(e.status)
 }

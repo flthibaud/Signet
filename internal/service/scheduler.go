@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -13,6 +14,13 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Scheduler is the background worker pool that keeps feeds up to date. It runs
+// three periodic jobs on their own goroutines: the feed sync itself, an hourly
+// sweep of expired tokens, and a sweep of OPML imports that stopped reporting
+// progress.
+//
+// Create it with NewScheduler, run it with Start, and always pair Start with
+// Stop — the workers hold a context the scheduler owns.
 type Scheduler struct {
 	services       *Services
 	logger         *jsonlog.Logger
@@ -20,10 +28,11 @@ type Scheduler struct {
 	workers        int
 	batchSize      int
 	quit           chan struct{}
-	ctx            context.Context // cancelled on Stop to abort in-flight syncs
+	wake           chan struct{}
+	ctx            context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
-	domainLimiters sync.Map // map[string]*rate.Limiter
+	domainLimiters sync.Map
 }
 
 // DefaultSyncInterval is used when no valid interval is configured. A
@@ -31,11 +40,16 @@ type Scheduler struct {
 // due in GetFeedsToSync.
 const DefaultSyncInterval = 15 * time.Minute
 
-// tokenCleanupInterval is how often expired tokens are swept. Nothing depends
-// on the timing — expired tokens already authenticate no one — so this only has
-// to be often enough that the table doesn't grow without bound.
+// tokenCleanupInterval is how often expired tokens are swept.
 const tokenCleanupInterval = time.Hour
 
+// staleImportAge is how long an OPML import may go without writing progress
+// before it is presumed dead.
+const staleImportAge = 30 * time.Minute
+
+// NewScheduler builds a scheduler without starting it. A non-positive interval
+// is replaced by DefaultSyncInterval rather than rejected, since the alternative
+// is a ticker that panics at Start.
 func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
 	if interval <= 0 {
 		interval = DefaultSyncInterval
@@ -49,11 +63,25 @@ func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Dura
 		workers:   workers,
 		batchSize: batchSize,
 		quit:      make(chan struct{}),
+		wake:      make(chan struct{}, 1),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
 }
 
+// TriggerSync asks for a sync pass without waiting for the next tick.
+func (s *Scheduler) TriggerSync() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Start launches the scheduler's goroutines and returns immediately.
+//
+// The first sync runs at once rather than on the first tick, so a freshly
+// started instance does not leave feeds stale for a whole interval. Call Stop
+// to shut it down.
 func (s *Scheduler) Start() {
 	s.logger.PrintInfo("scheduler started", map[string]string{
 		"interval":   s.interval.String(),
@@ -65,12 +93,13 @@ func (s *Scheduler) Start() {
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 
-		// Run immediately on start
 		s.syncFeeds()
 
 		for {
 			select {
 			case <-ticker.C:
+				s.syncFeeds()
+			case <-s.wake:
 				s.syncFeeds()
 			case <-s.quit:
 				return
@@ -78,19 +107,16 @@ func (s *Scheduler) Start() {
 		}
 	})
 
-	// Housekeeping runs on its own goroutine rather than sharing the feed tick:
-	// the two have nothing to do with each other, and a long sync shouldn't
-	// delay the sweep (or the other way round).
 	s.wg.Go(func() {
 		ticker := time.NewTicker(tokenCleanupInterval)
 		defer ticker.Stop()
 
-		s.purgeExpiredTokens()
+		s.housekeeping()
 
 		for {
 			select {
 			case <-ticker.C:
-				s.purgeExpiredTokens()
+				s.housekeeping()
 			case <-s.quit:
 				return
 			}
@@ -98,13 +124,37 @@ func (s *Scheduler) Start() {
 	})
 }
 
-// purgeExpiredTokens drops lapsed authentication and activation tokens. They
-// are already inert — GetForToken filters on expiry — so this is about keeping
-// the table from growing for the life of the install.
+func (s *Scheduler) housekeeping() {
+	s.purgeExpiredTokens()
+	s.failStaleImports()
+}
+
+func (s *Scheduler) logBackgroundError(err error, component string) {
+	if cancelledByShutdown(s.ctx, err) {
+		return
+	}
+
+	s.logger.PrintError(err, map[string]string{"component": component})
+}
+
+func (s *Scheduler) failStaleImports() {
+	interrupted, err := s.services.models.OPMLImports.FailStale(s.ctx, staleImportAge)
+	if err != nil {
+		s.logBackgroundError(err, "opml_import_cleanup")
+		return
+	}
+
+	if interrupted > 0 {
+		s.logger.PrintInfo("stale OPML imports marked interrupted", map[string]string{
+			"count": strconv.FormatInt(interrupted, 10),
+		})
+	}
+}
+
 func (s *Scheduler) purgeExpiredTokens() {
 	deleted, err := s.services.models.Tokens.DeleteExpired(s.ctx)
 	if err != nil {
-		s.logger.PrintError(err, map[string]string{"component": "token_cleanup"})
+		s.logBackgroundError(err, "token_cleanup")
 		return
 	}
 
@@ -115,10 +165,13 @@ func (s *Scheduler) purgeExpiredTokens() {
 	}
 }
 
+// Stop cancels the workers' context and blocks until every one of them has
+// returned, so a shutdown does not cut a sync off mid-write. It is not safe to
+// call twice: the second close of the quit channel panics.
 func (s *Scheduler) Stop() {
 	s.logger.PrintInfo("scheduler stopping, waiting for workers...", nil)
-	close(s.quit) // stop scheduling new ticks
-	s.cancel()    // abort any in-flight feed syncs
+	close(s.quit)
+	s.cancel()
 	s.wg.Wait()
 	s.logger.PrintInfo("scheduler stopped", nil)
 }
@@ -128,7 +181,7 @@ func (s *Scheduler) syncFeeds() {
 
 	feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
 	if err != nil {
-		s.logger.PrintError(err, map[string]string{"component": "scheduler"})
+		s.logBackgroundError(err, "scheduler")
 		return
 	}
 
@@ -140,7 +193,6 @@ func (s *Scheduler) syncFeeds() {
 		"count": strconv.Itoa(len(feeds)),
 	})
 
-	// Fan out to worker pool via buffered channel
 	feedsChan := make(chan *feedSyncJob, len(feeds))
 	for _, f := range feeds {
 		feedsChan <- &feedSyncJob{feed: f}
@@ -148,7 +200,7 @@ func (s *Scheduler) syncFeeds() {
 	close(feedsChan)
 
 	var workerWg sync.WaitGroup
-	for i := 0; i < s.workers; i++ {
+	for range s.workers {
 		workerWg.Go(func() {
 			for job := range feedsChan {
 				s.processFeed(ctx, job)
@@ -170,8 +222,6 @@ func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 				"url":     job.feed.Url,
 			})
 
-			// Detached context: a panic during shutdown arrives with ctx already
-			// cancelled, and that is exactly when the failure needs recording.
 			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			if _, err := s.services.models.Feeds.MarkFeedFailed(markCtx, job.feed.ID); err != nil {
@@ -183,9 +233,6 @@ func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 		}
 	}()
 
-	// Rate limit per domain. Wait only errors when the context is done, which on
-	// this path means Stop was called — carrying on would fetch with a dead
-	// context and report the failure as if the feed were at fault.
 	domain := extractDomain(job.feed.Url)
 	limiter := s.getOrCreateLimiter(domain)
 	if err := limiter.Wait(ctx); err != nil {
@@ -197,6 +244,17 @@ func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 		if cancelledByShutdown(ctx, err) {
 			s.logger.PrintInfo("feed sync cancelled at shutdown", map[string]string{
 				"feed_id": strconv.FormatInt(job.feed.ID, 10),
+			})
+			return
+		}
+
+		var fetchErr *FeedFetchError
+		if errors.As(err, &fetchErr) {
+			s.logger.PrintInfo("feed sync failed", map[string]string{
+				"feed_id":  strconv.FormatInt(job.feed.ID, 10),
+				"url":      job.feed.Url,
+				"reason":   fetchErr.Error(),
+				"failures": strconv.Itoa(fetchErr.Failures),
 			})
 			return
 		}

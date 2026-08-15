@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // Link is a user's saved copy of an article. ArchivedAt is a pointer because
@@ -58,15 +59,21 @@ type LinkDetail struct {
 	PublishedAt time.Time `json:"published_at"`
 }
 
+// LinkModel gives access to the links table, the per-user join onto articles.
 type LinkModel struct {
 	DB *sql.DB
 }
 
+// LinkFilters narrows a library listing. Every field is a pointer because all
+// three states matter: nil leaves the dimension alone, while a set value
+// restricts to it — so "unread only" and "read only" are both expressible
+// alongside "either".
 type LinkFilters struct {
 	IsRead    *bool
 	IsStarred *bool
 	Archived  *bool
 	FeedID    *int64
+	FolderID  *int64
 }
 
 // buildLinkFiltersWhere returns the WHERE clauses and their args for f.
@@ -95,6 +102,13 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 		where = append(where, fmt.Sprintf("l.feed_id = $%d", len(args)))
 	}
 
+	if f.FolderID != nil {
+		args = append(args, *f.FolderID)
+		where = append(where, fmt.Sprintf(
+			"l.feed_id IN (SELECT s.feed_id FROM subscriptions s WHERE s.user_id = $1 AND s.folder_id = $%d)",
+			len(args)))
+	}
+
 	return where, args
 }
 
@@ -103,6 +117,10 @@ func buildLinkFiltersWhere(userID uuid.UUID, f LinkFilters) ([]string, []any) {
 func (m LinkModel) ListForUser(ctx context.Context, userID uuid.UUID, filters LinkFilters, limit, offset int) ([]*LinkWithArticle, bool, error) {
 	where, args := buildLinkFiltersWhere(userID, filters)
 
+	// #nosec G201 -- the only interpolated values are placeholder indices
+	// derived from len(args) and the clause strings buildLinkFiltersWhere
+	// assembles from hardcoded column names. Every user-supplied value travels
+	// in args as a bind parameter.
 	query := fmt.Sprintf(`
 		SELECT l.id, l.article_id, l.slug, l.feed_id, l.is_read, l.is_starred, COALESCE(l.reading_progress, 0),
 			l.reading_progress_anchor_index,
@@ -224,6 +242,9 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 	return &link, nil
 }
 
+// Exists reports whether the user already has this article in their library.
+// The import path checks it before creating a link, so re-reading a feed does
+// not hand the same article to a user twice.
 func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64) (bool, error) {
 	query := `
 		SELECT EXISTS(
@@ -242,35 +263,39 @@ func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64
 
 // BulkInsertForArticle creates links for multiple users in a single query.
 // Uses ON CONFLICT DO NOTHING to skip users who already have this article.
+//
+// The user ids travel as one array parameter rather than as a generated VALUES
+// list. A row per user would have cost four placeholders each, and Postgres caps
+// a statement at 65535 of them — a feed passing ~16k subscribers would have
+// started failing the insert outright, losing the article for every subscriber
+// at once rather than degrading.
 func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID, articleID int64, feedID int64, baseSlug string) error {
 	if len(userIDs) == 0 {
 		return nil
 	}
 
-	query := `
-		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
-		VALUES `
+	// pq has no array encoder for uuid.UUID; the text form is cast back on the
+	// other side by the ::uuid[] annotation.
+	ids := make([]string, len(userIDs))
+	for i, uid := range userIDs {
+		ids[i] = uid.String()
+	}
 
 	// Each user has its own slug namespace (UNIQUE(user_id, slug)), so every
 	// subscriber gets the same baseSlug.
-	args := []any{}
-	for i, uid := range userIDs {
-		if i > 0 {
-			query += ", "
-		}
-		paramBase := i * 4
-		query += fmt.Sprintf(
-			"($%d, $%d, $%d, $%d, NOW(), NOW())",
-			paramBase+1, paramBase+2, paramBase+3, paramBase+4)
-		args = append(args, uid, articleID, feedID, baseSlug)
-	}
+	query := `
+		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
+		SELECT u.id, $2, $3, $4, NOW(), NOW()
+		FROM unnest($1::uuid[]) AS u(id)
+		ON CONFLICT (user_id, article_id) DO NOTHING`
 
-	query += " ON CONFLICT (user_id, article_id) DO NOTHING"
-
-	_, err := m.DB.ExecContext(ctx, query, args...)
+	_, err := m.DB.ExecContext(ctx, query, pq.Array(ids), articleID, feedID, baseSlug)
 	return err
 }
 
+// LinkUpdate is a partial write to a link's reading state. Nil fields are left
+// untouched, so a PATCH that only reports progress cannot clobber the read flag
+// a different tab set a moment earlier.
 type LinkUpdate struct {
 	IsRead                     *bool
 	IsStarred                  *bool
@@ -279,6 +304,8 @@ type LinkUpdate struct {
 	ReadingProgressAnchorIndex *int
 }
 
+// IsEmpty reports whether the update would write nothing, which the handler
+// rejects rather than turning into a query with no SET clause.
 func (u LinkUpdate) IsEmpty() bool {
 	return u.IsRead == nil && u.IsStarred == nil && u.Archived == nil &&
 		u.ReadingProgress == nil && u.ReadingProgressAnchorIndex == nil
@@ -326,6 +353,8 @@ func (m LinkModel) Update(ctx context.Context, userID uuid.UUID, slug string, up
 		return nil
 	}
 
+	// #nosec G201 -- buildLinkUpdateSet emits hardcoded column names against
+	// placeholder indices; the values it sets are bound through args.
 	query := fmt.Sprintf(`
 		UPDATE links
 		SET %s, updated_at = NOW()

@@ -5,8 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/lib/pq"
 )
 
+// Feed is one RSS/Atom source, shared by every user subscribed to it — feeds
+// are keyed by URL and stored once, with subscriptions carrying the per-user
+// half of the relationship.
+//
+// The unexported-from-JSON fields are sync bookkeeping the API never returns:
+// HttpEtag and HttpLastModified drive conditional requests, FetchingSince is
+// the scheduler's claim on the feed (see SyncLockWindow), and
+// ConsecutiveFailures tracks how long it has been failing.
 type Feed struct {
 	ID            int64     `json:"id"`
 	Url           string    `json:"url"`
@@ -23,10 +33,14 @@ type Feed struct {
 	ConsecutiveFailures int        `json:"-"`
 }
 
+// FeedModel gives access to the feeds table.
 type FeedModel struct {
 	DB *sql.DB
 }
 
+// Get returns the feed with the given ID. Feeds are not user-scoped, so no
+// ownership check applies. Returns sql.ErrNoRows if no feed has that ID —
+// unlike GetByURL, which maps it to ErrRecordNotFound.
 func (m FeedModel) Get(ctx context.Context, id int64) (*Feed, error) {
 	var feed Feed
 
@@ -53,6 +67,14 @@ func (m FeedModel) Get(ctx context.Context, id int64) (*Feed, error) {
 	return &feed, nil
 }
 
+// Insert stores a feed and fills in the generated columns on feed, including
+// its ID and conditional-request headers.
+//
+// A feed already known to the instance is not an error: the ON CONFLICT clause
+// makes the URL's existing row win and returns it, so two users subscribing to
+// the same feed at once both end up pointing at one row. The no-op SET is there
+// because DO NOTHING would return no row at all, leaving the caller without an
+// ID.
 func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 	query := `
 		INSERT INTO feeds (url, original_title, site_url, image_url, last_fetched_at, is_active, created_at)
@@ -90,6 +112,34 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 	return nil
 }
 
+// MarkDueForSync makes feeds eligible for the scheduler's next pass and clears
+// their conditional-request headers.
+//
+// Both halves matter when someone subscribes to a feed the instance already
+// knows. ImportArticlesForSubscribers returns on a 304 before creating any
+// links, so keeping the ETag would leave the new subscriber with an empty
+// library until the feed happened to publish something. Clearing the headers
+// forces a 200 and a full re-read.
+//
+// last_fetched_at is set to the epoch rather than NULL because Get and GetByURL
+// scan that column into a plain time.Time.
+func (m FeedModel) MarkDueForSync(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	query := `
+		UPDATE feeds
+		SET last_fetched_at = to_timestamp(0),
+		    fetching_since = NULL,
+		    http_etag = '',
+		    http_last_modified = ''
+		WHERE id = ANY($1)`
+
+	_, err := m.DB.ExecContext(ctx, query, pq.Array(ids))
+	return err
+}
+
 // DeleteIfOrphan removes a feed that no one is subscribed to. It exists to undo
 // a feed created while adding a subscription that then failed to insert:
 // creating the feed requires an HTTP fetch, so the two writes cannot share a
@@ -107,6 +157,10 @@ func (m FeedModel) DeleteIfOrphan(ctx context.Context, id int64) error {
 	return err
 }
 
+// GetByURL returns the feed stored under url, which is how the subscribe path
+// discovers that the instance already knows a feed and avoids re-fetching it.
+// The URL is matched exactly, so it must be the canonical one. Returns
+// ErrRecordNotFound if no feed has that URL.
 func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 	var feed Feed
 

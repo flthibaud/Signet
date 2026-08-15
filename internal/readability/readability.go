@@ -1,3 +1,15 @@
+// Package readability turns the HTML that go-readability extracted from an
+// article page into clean Markdown, which is the form articles are stored and
+// served in.
+//
+// It is a post-processing layer, not an extractor: the caller runs
+// go-readability first, and this decides what survives the conversion —
+// preprocess.go strips navigation, share widgets and duplicated <picture>
+// sources; attrs.go and dom.go handle the node-level rules; youtube.go replaces
+// an embed with a link, since a player cannot be rendered in Markdown.
+//
+// See docs/READABILITY_TESTING.md for the fixture-based tests that pin these
+// rules to real pages.
 package readability
 
 import (
@@ -15,6 +27,8 @@ import (
 // Readability converts HTML output from go-readability into clean Markdown.
 type Readability struct{}
 
+// NewReadability returns a converter. It holds no state, so one instance is
+// safe to share across goroutines and there is nothing to close.
 func NewReadability() *Readability {
 	return &Readability{}
 }

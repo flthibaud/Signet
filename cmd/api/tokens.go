@@ -10,11 +10,6 @@ import (
 	"github.com/flthibaud/signet/internal/validator"
 )
 
-const (
-	ScopeActivation     = "activation"
-	ScopeAuthentication = "authentication" // Include a new authentication scope.
-)
-
 // authCookieName is the httpOnly cookie the SPA authenticates with; API clients
 // send the same token as a bearer instead.
 const authCookieName = "auth_token"
@@ -36,29 +31,47 @@ func sessionDueForRefresh(expiry time.Time, ttl time.Duration) bool {
 	return time.Until(expiry) <= time.Duration(float64(ttl)*sessionRefreshRatio)
 }
 
+// secureCookies reports whether the session cookie should carry the Secure
+// flag.
+//
+// The configured environment alone is not enough to decide: an instance served
+// over HTTPS with ENV left at its default would hand out a session cookie a
+// network attacker can read off a plain-HTTP request. Reading the request's own
+// scheme covers that, and keeping the env check means a production deployment
+// still sets the flag on the odd request that reaches the binary over HTTP.
+func (app *application) secureCookies(r *http.Request) bool {
+	return app.config.env == "production" || requestIsHTTPS(r)
+}
+
 // setAuthCookie writes the session cookie for a token that expires at expiry.
 // SameSite=Lax is enough because the API is same-origin with the SPA and every
 // state-changing call is a fetch from it.
-func (app *application) setAuthCookie(w http.ResponseWriter, plaintext string, expiry time.Time) {
+func (app *application) setAuthCookie(w http.ResponseWriter, r *http.Request, plaintext string, expiry time.Time) {
+	// #nosec G124 -- Secure is deliberately conditional, see secureCookies: a
+	// literal true would make the cookie undeliverable over plain HTTP in local
+	// development. HttpOnly and SameSite are set unconditionally.
 	http.SetCookie(w, &http.Cookie{
 		Name:     authCookieName,
 		Value:    plaintext,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   app.config.env == "production",
+		Secure:   app.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(time.Until(expiry).Seconds()),
 	})
 }
 
 // clearAuthCookie expires the session cookie.
-func (app *application) clearAuthCookie(w http.ResponseWriter) {
+func (app *application) clearAuthCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- Secure is deliberately conditional, see secureCookies: a
+	// literal true would make the cookie undeliverable over plain HTTP in local
+	// development. HttpOnly and SameSite are set unconditionally.
 	http.SetCookie(w, &http.Cookie{
 		Name:     authCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   app.config.env == "production",
+		Secure:   app.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -100,7 +113,7 @@ func (app *application) refreshSession(w http.ResponseWriter, r *http.Request, t
 		if err != nil {
 			return
 		}
-		app.setAuthCookie(w, cookie.Value, newExpiry)
+		app.setAuthCookie(w, r, cookie.Value, newExpiry)
 	}
 }
 
@@ -135,6 +148,9 @@ func (app *application) createAuthenticationTokenHandler(w http.ResponseWriter, 
 	if err != nil {
 		switch {
 		case errors.Is(err, data.ErrRecordNotFound):
+			// Spend what the bcrypt comparison below would have cost, so an
+			// address with no account here takes as long to reject as one with.
+			data.DecoyPasswordCheck(input.Password)
 			app.invalidCredentialsResponse(w, r)
 		default:
 			app.serverErrorResponse(w, r, err)
@@ -165,7 +181,7 @@ func (app *application) createAuthenticationTokenHandler(w http.ResponseWriter, 
 		return
 	}
 
-	app.setAuthCookie(w, token.Plaintext, token.Expiry)
+	app.setAuthCookie(w, r, token.Plaintext, token.Expiry)
 
 	// Encode the token to JSON and send it in the response along with a 201 Created
 	// status code.
@@ -190,7 +206,7 @@ func (app *application) deleteAuthenticationTokenHandler(w http.ResponseWriter, 
 
 	// Expire the cookie regardless of authentication state, so a stale or
 	// invalid cookie is cleaned up too.
-	app.clearAuthCookie(w)
+	app.clearAuthCookie(w, r)
 
 	err := app.writeJSON(w, http.StatusOK, envelope{"message": "successfully logged out"}, nil)
 	if err != nil {

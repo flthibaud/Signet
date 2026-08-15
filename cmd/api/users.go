@@ -22,22 +22,28 @@ func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Reque
 		app.badRequestResponse(w, r, err)
 		return
 	}
-	// Copy the data from the request body into a new User struct. Notice also that we
-	// set the Activated field to false, which isn't strictly necessary because the
-	// Activated field will have the zero-value of false by default. But setting this
-	// explicitly helps to make our intentions clear to anyone reading the code.
 	user := &data.User{
 		Username: input.Username,
 		Email:    input.Email,
 	}
-	// Use the Password.Set() method to generate and store the hashed and plaintext
-	// passwords.
+
+	// The password is checked before it is hashed, not after. bcrypt refuses
+	// anything over 72 bytes outright, so hashing first turned what should be a
+	// field error into a 500; and its ~250ms of CPU is not something an
+	// unauthenticated caller should be able to spend on input already known to
+	// be unusable.
+	v := validator.New()
+	if data.ValidatePasswordPlaintext(v, input.Password); !v.Valid() {
+		app.failedValidationResponse(w, r, v.Errors)
+		return
+	}
+
 	err = user.Password.Set(input.Password)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 		return
 	}
-	v := validator.New()
+
 	// Validate the user struct and return the error messages to the client if any of
 	// the checks fail.
 	if data.ValidateUser(v, user); !v.Valid() {

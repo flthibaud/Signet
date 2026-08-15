@@ -12,11 +12,11 @@ var removalRules = []func(*html.Node) bool{
 	hasAttrRule("data-nosnippet"), // ads, promos, PWA install
 	hasAttrRule("data-vendor"),    // consent blocks
 	hasAttrRule("data-tracking"),
-	tagRule("picture"),                               // lazy-load wrappers with duplicate imgs
-	hasIDRule("div", "download"),                      // Numerama app download widget
-	hasIDRule("div", "js-modal-gifted-url"),          // Le Monde gifted modal
-	hasIDRule("section", "js-capping"),               // Le Monde paywall cap
-	hasIDRule("section", "js-capping-old-article"),   // Le Monde paywall cap (old)
+	tagRule("picture"),                             // lazy-load wrappers with duplicate imgs
+	hasIDRule("div", "download"),                   // Numerama app download widget
+	hasIDRule("div", "js-modal-gifted-url"),        // Le Monde gifted modal
+	hasIDRule("section", "js-capping"),             // Le Monde paywall cap
+	hasIDRule("section", "js-capping-old-article"), // Le Monde paywall cap (old)
 	func(n *html.Node) bool {
 		return hasAttr(n, "tabindex") && getAttr(n, "tabindex") == "-1"
 	},

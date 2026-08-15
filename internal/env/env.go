@@ -1,3 +1,12 @@
+// Package env reads configuration from environment variables, collecting every
+// parse and range failure instead of stopping at the first.
+//
+// That is the whole point of the Loader type: a deployment with three bad
+// values learns about all three on one start, rather than fixing one, restarting,
+// and finding the next. Read the variables, then call Err once.
+//
+// An empty variable counts as unset, so `FOO=` in a .env file falls back to the
+// default rather than failing to parse.
 package env
 
 import (
@@ -14,6 +23,9 @@ type Loader struct {
 	errs []error
 }
 
+// NewLoader returns a Loader with no errors recorded. Read every variable off
+// it, then call Err once — the point of the type is that a misconfigured
+// deployment sees all of its problems on one start rather than one per restart.
 func NewLoader() *Loader {
 	return &Loader{}
 }

@@ -31,6 +31,13 @@ const (
 		", MaxWords=32, MinWords=12, MaxFragments=1, FragmentDelimiter= … "
 )
 
+// SearchResult is one hit. Snippet is the ts_headline extract, with matched
+// terms wrapped in the HighlightStart/HighlightEnd markers — plain text the
+// frontend splits on, never HTML, so a match inside an article cannot inject a
+// tag into the results list.
+//
+// Rank is only meaningful within one response: it scores a result against this
+// query, not against anything else.
 type SearchResult struct {
 	ID          int64      `json:"id"`
 	Slug        string     `json:"slug"`
@@ -75,8 +82,11 @@ type SearchFilters struct {
 // list ('foo' & 'bar'), so appending the marker only ever affects the trailing
 // term. A query made solely of stopwords renders as the empty string, which is
 // not a valid tsquery; it collapses to NULL instead, and NULL never matches.
+// config is interpolated into the query text rather than bound, so it is run
+// through safeTextSearchConfig here — at the point of interpolation — instead of
+// being trusted from the caller.
 func tsqueryExpr(n int, config string) string {
-	parsed := fmt.Sprintf("websearch_to_tsquery('%s', $%d)", config, n)
+	parsed := fmt.Sprintf("websearch_to_tsquery('%s', $%d)", safeTextSearchConfig(config), n)
 	return fmt.Sprintf(
 		"(CASE WHEN %s::text = '' THEN NULL::tsquery ELSE (%s::text || ':*')::tsquery END)",
 		parsed, parsed,
@@ -96,7 +106,11 @@ func tsqueryExpr(n int, config string) string {
 // "le" in French would wipe out the neutral half that would have matched.
 func searchQueryExpr(n int, language string) string {
 	neutral := tsqueryExpr(n, SimpleTextSearchConfig)
-	if language == "" || language == SimpleTextSearchConfig {
+
+	// Resolved up front so an unrecognized value collapses to the neutral half
+	// here, rather than producing a redundant `neutral || neutral`.
+	language = safeTextSearchConfig(language)
+	if language == SimpleTextSearchConfig {
 		return neutral
 	}
 

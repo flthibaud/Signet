@@ -2,6 +2,11 @@ package data
 
 import "strings"
 
+// SimpleTextSearchConfig is the neutral, unaccented configuration used when a
+// language has no stemmer, or none could be determined. It indexes words as
+// written, so it matches what the user literally typed at the cost of any
+// morphology — which is also why every article's tsvector includes a half built
+// with it, alongside the one built with its own language.
 const SimpleTextSearchConfig = "simple_ua"
 
 // textSearchConfigs maps a BCP-47 primary subtag to the unaccent-enabled
@@ -42,6 +47,33 @@ var textSearchConfigs = map[string]string{
 	"ta": "tamil_ua",
 	"tr": "turkish_ua",
 	"yi": "yiddish_ua",
+}
+
+// knownTextSearchConfigs is the set of names ResolveTextSearchConfig can return.
+// Membership in it is what makes a name safe to interpolate into SQL.
+var knownTextSearchConfigs = func() map[string]struct{} {
+	set := map[string]struct{}{SimpleTextSearchConfig: {}}
+	for _, config := range textSearchConfigs {
+		set[config] = struct{}{}
+	}
+	return set
+}()
+
+// safeTextSearchConfig returns config unchanged when it is one of the fixed
+// identifiers this package produces, and SimpleTextSearchConfig otherwise.
+//
+// A text search configuration cannot be a bind parameter — the planner has to
+// see it as a constant to fold the tsquery and reach the GIN index — so it is
+// interpolated into the query text, and an unchecked value there is a SQL
+// injection. Callers are expected to have gone through ResolveTextSearchConfig
+// already; this makes the interpolation safe even when they have not, rather
+// than leaving that guarantee to a convention a future caller may not know
+// about.
+func safeTextSearchConfig(config string) string {
+	if _, ok := knownTextSearchConfigs[config]; ok {
+		return config
+	}
+	return SimpleTextSearchConfig
 }
 
 // ResolveTextSearchConfig maps a language tag ("fr", "fr-FR", "en_US") to a

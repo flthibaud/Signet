@@ -82,7 +82,8 @@ func TestSetAuthCookie(t *testing.T) {
 	app.config.env = "production"
 
 	rr := httptest.NewRecorder()
-	app.setAuthCookie(rr, "TOKENVALUE", time.Now().Add(2*time.Hour))
+	app.setAuthCookie(rr, httptest.NewRequest(http.MethodPost, "/v1/tokens/authentication", nil),
+		"TOKENVALUE", time.Now().Add(2*time.Hour))
 
 	cookie := findCookie(rr.Result().Cookies(), authCookieName)
 	if cookie == nil {
@@ -94,6 +95,50 @@ func TestSetAuthCookie(t *testing.T) {
 	// Allow a second of slack for the clock between call and assertion.
 	if cookie.MaxAge < int(2*time.Hour/time.Second)-1 || cookie.MaxAge > int(2*time.Hour/time.Second) {
 		t.Errorf("MaxAge = %d, want ~%d", cookie.MaxAge, int(2*time.Hour/time.Second))
+	}
+}
+
+// A non-production instance still has to mark the cookie Secure when the
+// request itself arrived over HTTPS — otherwise a deployment that forgot to set
+// ENV hands out a session cookie readable off a plain-HTTP request.
+func TestSetAuthCookieSecureOverHTTPS(t *testing.T) {
+	app := &application{}
+	app.config.env = "development"
+
+	tests := []struct {
+		name       string
+		setup      func(r *http.Request)
+		wantSecure bool
+	}{
+		{
+			name:       "plain http",
+			setup:      func(*http.Request) {},
+			wantSecure: false,
+		},
+		{
+			name:       "terminated TLS reported by the proxy",
+			setup:      func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") },
+			wantSecure: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/v1/tokens/authentication", nil)
+			r.TLS = nil
+			tt.setup(r)
+
+			rr := httptest.NewRecorder()
+			app.setAuthCookie(rr, r, "TOKENVALUE", time.Now().Add(time.Hour))
+
+			cookie := findCookie(rr.Result().Cookies(), authCookieName)
+			if cookie == nil {
+				t.Fatal("no auth cookie in response")
+			}
+			if cookie.Secure != tt.wantSecure {
+				t.Errorf("Secure = %v, want %v", cookie.Secure, tt.wantSecure)
+			}
+		})
 	}
 }
 

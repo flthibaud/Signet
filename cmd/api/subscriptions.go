@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -20,7 +21,6 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// 1. Validation
 	v := validator.New()
 	v.Check(input.URL != "", "url", "must be provided")
 	v.Check(len(input.URL) <= 2048, "url", "must not be more than 2048 characters long")
@@ -33,7 +33,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 
 	userID := app.contextGetUser(r).ID
 
-	subscription, err := app.services.SubscriptionService.Subscribe(r.Context(), userID, input.URL)
+	subscription, err := app.services.SubscriptionService.Subscribe(r.Context(), userID, input.URL, service.SubscribeOptions{})
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrInvalidFeed):
@@ -51,8 +51,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// L'import des articles tourne en tâche de fond, la réponse part sans
-	// l'attendre.
+	// The article import runs in the background; the response does not wait on it.
 	err = app.writeJSON(w, http.StatusCreated, envelope{
 		"subscription": subscription,
 		"message":      "Subscription created. Articles are being imported in the background.",
@@ -83,6 +82,70 @@ func (app *application) deleteSubscriptionHandler(w http.ResponseWriter, r *http
 	}
 
 	err = app.writeJSON(w, http.StatusOK, envelope{"message": "subscription successfully deleted"}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
+}
+
+func (app *application) updateSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := app.readIDParam(r)
+	if err != nil {
+		app.notFoundResponse(w, r)
+		return
+	}
+
+	// Decoded raw so that an absent key and an explicit null stay distinct:
+	// null unfiles the subscription, absent is a malformed request.
+	var input struct {
+		FolderID json.RawMessage `json:"folder_id"`
+	}
+
+	err = app.readJSON(w, r, &input)
+	if err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
+
+	v := validator.New()
+	v.Check(len(input.FolderID) > 0, "folder_id", "must be provided")
+	if !v.Valid() {
+		app.failedValidationResponse(w, r, v.Errors)
+		return
+	}
+
+	var folderID *int64
+	if err := json.Unmarshal(input.FolderID, &folderID); err != nil {
+		app.badRequestResponse(w, r, errors.New("body contains incorrect JSON type for field \"folder_id\""))
+		return
+	}
+
+	userID := app.contextGetUser(r).ID
+
+	if folderID != nil {
+		if _, err := app.models.Folders.Get(r.Context(), userID, *folderID); err != nil {
+			switch {
+			case errors.Is(err, data.ErrRecordNotFound):
+				v.AddError("folder_id", "no such folder")
+				app.failedValidationResponse(w, r, v.Errors)
+			default:
+				app.serverErrorResponse(w, r, err)
+			}
+			return
+		}
+	}
+
+	err = app.models.Subscriptions.SetFolder(r.Context(), userID, id, folderID)
+	if err != nil {
+		switch {
+		case errors.Is(err, data.ErrRecordNotFound):
+			app.notFoundResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
+		return
+	}
+
+	err = app.writeJSON(w, http.StatusOK, envelope{"message": "subscription successfully updated"}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}

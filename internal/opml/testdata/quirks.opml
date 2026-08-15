@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>Quirky export</title>
+  </head>
+  <body>
+    <!-- casing the spec does not mandate, and exporters get wrong -->
+    <outline TEXT="Uppercase attrs" xmlURL="https://example.com/upper.xml"/>
+    <!-- title= only, no text= -->
+    <outline title="Title only" type="rss" xmlUrl="https://example.com/title-only.xml"/>
+    <!-- an empty folder: not an error, just nothing to import -->
+    <outline text="Empty folder"/>
+    <!-- unescaped ampersand, which strict XML would reject -->
+    <outline text="Rock & Roll" type="rss" xmlUrl="https://example.com/rock.xml"/>
+    <!-- no title at all: the URL stands in -->
+    <outline type="rss" xmlUrl="https://example.com/anonymous.xml"/>
+  </body>
+</opml>
