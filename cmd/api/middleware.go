@@ -85,23 +85,12 @@ func requestIsHTTPS(r *http.Request) bool {
 
 func (app *application) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Create a deferred function (which will always be run in the event of a panic
-		// as Go unwinds the stack).
 		defer func() {
-			// Use the builtin recover function to check if there has been a panic or
-			// not.
 			if err := recover(); err != nil {
-				// If there was a panic, set a "Connection: close" header on the
-				// response. This acts as a trigger to make Go's HTTP server
-				// automatically close the current connection after a response has been
-				// sent.
+				// Closing the connection is what stops the server from reusing a
+				// connection whose handler died mid-response.
 				w.Header().Set("Connection", "close")
-				// The value returned by recover() has the type any, so we use
-				// fmt.Errorf() to normalize it into an error and call our
-				// serverErrorResponse() helper. In turn, this will log the error using
-				// our custom Logger type at the ERROR level and send the client a 500
-				// Internal Server Error response.
-				app.serverErrorResponse(w, r, fmt.Errorf("%s", err))
+				app.serverErrorResponse(w, r, fmt.Errorf("%v", err))
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -164,32 +153,25 @@ func (app *application) clientIP(r *http.Request) string {
 }
 
 func (app *application) rateLimit(next http.Handler) http.Handler {
-	// Define a client struct to hold the rate limiter and last seen time for each
-	// client.
 	type client struct {
 		limiter  *rate.Limiter
 		lastSeen time.Time
 	}
 
 	var (
-		mu sync.Mutex
-		// Update the map so the values are pointers to a client struct.
+		mu      sync.Mutex
 		clients = make(map[string]*client)
 	)
 
-	// Launch a background goroutine which removes old entries from the clients map once
-	// every minute. Only worth running when the limiter is on — the map stays
-	// empty otherwise, and the configuration is fixed by the time the middleware
-	// chain is built.
+	// Evicting idle clients keeps the map from growing with every address ever
+	// seen. Only worth running when the limiter is on — the map stays empty
+	// otherwise, and the configuration is fixed by the time the chain is built.
 	if app.config.limiter.enabled {
 		go func() {
 			for {
 				time.Sleep(time.Minute)
-				// Lock the mutex to prevent any rate limiter checks from happening while
-				// the cleanup is taking place.
+
 				mu.Lock()
-				// Loop through all clients. If they haven't been seen within the last three
-				// minutes, delete the corresponding entry from the map.
 				for ip, client := range clients {
 					if time.Since(client.lastSeen) > 3*time.Minute {
 						delete(clients, ip)
@@ -200,18 +182,15 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 		}()
 	}
 
-	// Importantly, unlock the mutex when the cleanup is complete.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, apiPrefix) {
 			ip := app.clientIP(r)
 			mu.Lock()
 			if _, found := clients[ip]; !found {
-				// Create and add a new client struct to the map if it doesn't already exist.
 				clients[ip] = &client{
 					limiter: rate.NewLimiter(rate.Limit(app.config.limiter.rps), app.config.limiter.burst),
 				}
 			}
-			// Update the last seen time for the client.
 			clients[ip].lastSeen = time.Now()
 
 			if !clients[ip].limiter.Allow() {
@@ -229,12 +208,14 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 
 func (app *application) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Try to get the token from the Authorization header first, then fall back
-		// to the auth_token cookie. A malformed or expired cookie is treated as an
-		// anonymous request (not a 401): browsers keep sending stale cookies, and
-		// guest pages must stay reachable so the user can log in again.
-		var token string
-		var fromCookie bool
+		// The Authorization header wins over the auth_token cookie. A malformed or
+		// expired cookie is treated as an anonymous request (not a 401): browsers
+		// keep sending stale cookies, and guest pages must stay reachable so the
+		// user can log in again.
+		var (
+			token      string
+			fromCookie bool
+		)
 
 		authorizationHeader := r.Header.Get("Authorization")
 
@@ -259,12 +240,8 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 			fromCookie = true
 		}
 
-		// Validate the token to make sure it is in a sensible format.
 		v := validator.New()
 
-		// If the token isn't valid, use the invalidAuthenticationTokenResponse()
-		// helper to send a response, rather than the failedValidationResponse() helper
-		// that we'd normally use.
 		if data.ValidateTokenPlaintext(v, token); !v.Valid() {
 			if fromCookie {
 				r = app.contextSetUser(r, data.AnonymousUser)
@@ -275,10 +252,6 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		// Retrieve the details of the user associated with the authentication token,
-		// again calling the invalidAuthenticationTokenResponse() helper if no
-		// matching record was found. IMPORTANT: Notice that we are using
-		// ScopeAuthentication as the first parameter here.
 		user, expiry, err := app.models.Users.GetForToken(data.ScopeAuthentication, token)
 		if err != nil {
 			switch {
@@ -295,9 +268,8 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		// Call the contextSetUser() helper to add the user information to the request
-		// context, and carry the token's identity alongside it so logout can end
-		// this session alone.
+		// The token's identity travels alongside the user so logout can end this
+		// session alone.
 		tokenHash := data.HashTokenPlaintext(token)
 		r = app.contextSetUser(r, user)
 		r = app.contextSetTokenHash(r, tokenHash)
@@ -307,7 +279,6 @@ func (app *application) authenticate(next http.Handler) http.Handler {
 		// anything writes a body.
 		app.refreshSession(w, r, tokenHash, expiry, fromCookie)
 
-		// Call the next handler in the chain.
 		next.ServeHTTP(w, r)
 	})
 }
@@ -327,13 +298,15 @@ var publicAPIRoutes = map[string]struct{}{
 // requireAuthenticatedUser rejects anonymous requests to the JSON API.
 func (app *application) requireAuthenticatedUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, apiPrefix) {
-			if _, public := publicAPIRoutes[r.Method+" "+r.URL.Path]; !public {
-				if app.contextGetUser(r).IsAnonymous() {
-					app.invalidAuthenticationTokenResponse(w, r)
-					return
-				}
-			}
+		if !strings.HasPrefix(r.URL.Path, apiPrefix) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		_, public := publicAPIRoutes[r.Method+" "+r.URL.Path]
+		if !public && app.contextGetUser(r).IsAnonymous() {
+			app.invalidAuthenticationTokenResponse(w, r)
+			return
 		}
 
 		next.ServeHTTP(w, r)

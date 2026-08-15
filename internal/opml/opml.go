@@ -2,9 +2,10 @@ package opml
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -71,7 +72,7 @@ func (o *outline) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 
 	for {
 		token, err := d.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -108,7 +109,7 @@ func Parse(r io.Reader) ([]Entry, error) {
 		return nil, fmt.Errorf("invalid OPML: %w", err)
 	}
 
-	var entries []Entry
+	entries := []Entry{}
 	collect(doc.Body.Outlines, nil, &entries)
 
 	return entries, nil
@@ -148,7 +149,7 @@ func collect(outlines []outline, path []string, entries *[]Entry) {
 // folder.
 func Write(w io.Writer, title string, entries []Entry) error {
 	byFolder := map[string][]outline{}
-	var folders []string
+	folders := []string{}
 
 	for _, e := range entries {
 		if _, seen := byFolder[e.Folder]; !seen && e.Folder != "" {
@@ -168,7 +169,7 @@ func Write(w io.Writer, title string, entries []Entry) error {
 		})
 	}
 
-	sort.Strings(folders)
+	slices.Sort(folders)
 
 	outlines := make([]outline, 0, len(folders)+len(byFolder[""]))
 	for _, name := range folders {

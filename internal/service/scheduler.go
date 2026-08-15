@@ -182,7 +182,7 @@ func (s *Scheduler) syncFeeds() {
 	close(feedsChan)
 
 	var workerWg sync.WaitGroup
-	for i := 0; i < s.workers; i++ {
+	for range s.workers {
 		workerWg.Go(func() {
 			for job := range feedsChan {
 				s.processFeed(ctx, job)

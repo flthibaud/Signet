@@ -21,7 +21,6 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// 1. Validation
 	v := validator.New()
 	v.Check(input.URL != "", "url", "must be provided")
 	v.Check(len(input.URL) <= 2048, "url", "must not be more than 2048 characters long")
@@ -52,8 +51,7 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// L'import des articles tourne en tâche de fond, la réponse part sans
-	// l'attendre.
+	// The article import runs in the background; the response does not wait on it.
 	err = app.writeJSON(w, http.StatusCreated, envelope{
 		"subscription": subscription,
 		"message":      "Subscription created. Articles are being imported in the background.",
