@@ -14,6 +14,13 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Scheduler is the background worker pool that keeps feeds up to date. It runs
+// three periodic jobs on their own goroutines: the feed sync itself, an hourly
+// sweep of expired tokens, and a sweep of OPML imports that stopped reporting
+// progress.
+//
+// Create it with NewScheduler, run it with Start, and always pair Start with
+// Stop — the workers hold a context the scheduler owns.
 type Scheduler struct {
 	services       *Services
 	logger         *jsonlog.Logger
@@ -40,6 +47,9 @@ const tokenCleanupInterval = time.Hour
 // before it is presumed dead.
 const staleImportAge = 30 * time.Minute
 
+// NewScheduler builds a scheduler without starting it. A non-positive interval
+// is replaced by DefaultSyncInterval rather than rejected, since the alternative
+// is a ticker that panics at Start.
 func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
 	if interval <= 0 {
 		interval = DefaultSyncInterval
@@ -67,6 +77,11 @@ func (s *Scheduler) TriggerSync() {
 	}
 }
 
+// Start launches the scheduler's goroutines and returns immediately.
+//
+// The first sync runs at once rather than on the first tick, so a freshly
+// started instance does not leave feeds stale for a whole interval. Call Stop
+// to shut it down.
 func (s *Scheduler) Start() {
 	s.logger.PrintInfo("scheduler started", map[string]string{
 		"interval":   s.interval.String(),
@@ -150,6 +165,9 @@ func (s *Scheduler) purgeExpiredTokens() {
 	}
 }
 
+// Stop cancels the workers' context and blocks until every one of them has
+// returned, so a shutdown does not cut a sync off mid-write. It is not safe to
+// call twice: the second close of the quit channel panics.
 func (s *Scheduler) Stop() {
 	s.logger.PrintInfo("scheduler stopping, waiting for workers...", nil)
 	close(s.quit)

@@ -10,11 +10,6 @@ import (
 	"github.com/flthibaud/signet/internal/validator"
 )
 
-const (
-	ScopeActivation     = "activation"
-	ScopeAuthentication = "authentication" // Include a new authentication scope.
-)
-
 // authCookieName is the httpOnly cookie the SPA authenticates with; API clients
 // send the same token as a bearer instead.
 const authCookieName = "auth_token"

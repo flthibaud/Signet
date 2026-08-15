@@ -5,27 +5,25 @@ import (
 	"net/http"
 )
 
-// The logError() method is a generic helper for logging an error message. Later in the
-// book we'll upgrade this to use structured logging, and record additional information
-// about the request including the HTTP method and URL.
+// logError records an error the client is not told the details of, tagged with
+// the request it came from so an entry can be traced back to one call.
 func (app *application) logError(r *http.Request, err error) {
-	// Use the PrintError() method to log the error message, and include the current
-	// request method and URL as properties in the log entry.
 	app.logger.PrintError(err, map[string]string{
 		"request_method": r.Method,
 		"request_url":    r.URL.String(),
 	})
 }
 
-// The errorResponse() method is a generic helper for sending JSON-formatted error
-// messages to the client with a given status code. Note that we're using an any
-// type for the message parameter, rather than just a string type, as this gives us
-// more flexibility over the values that we can include in the response.
+// errorResponse writes the {"error": ...} envelope every handler in this package
+// reports failures through. message is an any because the envelope carries two
+// shapes: a string for generic errors, and a map[string]string of field errors
+// for a 422 (see failedValidationResponse).
+//
+// If encoding the envelope itself fails the client gets a bare 500, since the
+// response cannot be written twice.
 func (app *application) errorResponse(w http.ResponseWriter, r *http.Request, status int, message any) {
 	env := envelope{"error": message}
-	// Write the response using the writeJSON() helper. If this happens to return an
-	// error then log it, and fall back to sending the client an empty response with a
-	// 500 Internal Server Error status code.
+
 	err := app.writeJSON(w, status, env, nil)
 	if err != nil {
 		app.logError(r, err)
@@ -33,50 +31,62 @@ func (app *application) errorResponse(w http.ResponseWriter, r *http.Request, st
 	}
 }
 
-// The serverErrorResponse() method will be used when our application encounters an
-// unexpected problem at runtime. It logs the detailed error message, then uses the
-// errorResponse() helper to send a 500 Internal Server Error status code and JSON
-// response (containing a generic error message) to the client.
+// serverErrorResponse reports an unexpected runtime failure: the details go to
+// the log, the client gets a generic message. The two are deliberately
+// different — an error string can name a table, a query or an internal host.
 func (app *application) serverErrorResponse(w http.ResponseWriter, r *http.Request, err error) {
 	app.logError(r, err)
 	message := "the server encountered a problem and could not process your request"
 	app.errorResponse(w, r, http.StatusInternalServerError, message)
 }
 
-// The notFoundResponse() method will be used to send a 404 Not Found status code and
-// JSON response to the client.
+// notFoundResponse reports that the resource does not exist. It also backs the
+// router's 404 under the API prefix, so an unknown /v1/ path comes back as JSON
+// rather than as the file server's plain text (see routes).
 func (app *application) notFoundResponse(w http.ResponseWriter, r *http.Request) {
 	message := "the requested resource could not be found"
 	app.errorResponse(w, r, http.StatusNotFound, message)
 }
 
-// The methodNotAllowedResponse() method will be used to send a 405 Method Not Allowed
-// status code and JSON response to the client.
+// methodNotAllowedResponse reports that the path exists but not for this
+// method. It is wired to the router's MethodNotAllowed handler.
 func (app *application) methodNotAllowedResponse(w http.ResponseWriter, r *http.Request) {
 	message := fmt.Sprintf("the %s method is not supported for this resource", r.Method)
 	app.errorResponse(w, r, http.StatusMethodNotAllowed, message)
 }
 
+// badRequestResponse reports input the server could not even parse — malformed
+// JSON, an unusable query parameter. err's text is returned to the client, so
+// only pass one whose message is safe to expose.
 func (app *application) badRequestResponse(w http.ResponseWriter, r *http.Request, err error) {
 	app.errorResponse(w, r, http.StatusBadRequest, err.Error())
 }
 
-// Note that the errors parameter here has the type map[string]string, which is exactly
-// the same as the errors map contained in our Validator type.
+// failedValidationResponse reports input that parsed but did not pass its
+// checks, as a 422 whose envelope maps each field to its message. errors is a
+// validator.Validator's Errors map; the frontend feeds it straight back into
+// the form (see applyApiError).
 func (app *application) failedValidationResponse(w http.ResponseWriter, r *http.Request, errors map[string]string) {
 	app.errorResponse(w, r, http.StatusUnprocessableEntity, errors)
 }
 
+// rateLimitExceededResponse reports that the client's bucket is empty. Only
+// reachable under the API prefix — the SPA's assets are never throttled.
 func (app *application) rateLimitExceededResponse(w http.ResponseWriter, r *http.Request) {
 	message := "rate limit exceeded"
 	app.errorResponse(w, r, http.StatusTooManyRequests, message)
 }
 
+// invalidCredentialsResponse reports a failed sign-in. The message says nothing
+// about which half was wrong, so it cannot be used to test whether an address
+// has an account here (see data.DecoyPasswordCheck for the timing half of it).
 func (app *application) invalidCredentialsResponse(w http.ResponseWriter, r *http.Request) {
 	message := "invalid authentication credentials"
 	app.errorResponse(w, r, http.StatusUnauthorized, message)
 }
 
+// invalidAuthenticationTokenResponse reports a missing, malformed or expired
+// token on a route that requires one.
 func (app *application) invalidAuthenticationTokenResponse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	message := "invalid or missing authentication token"

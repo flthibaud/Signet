@@ -59,10 +59,15 @@ type LinkDetail struct {
 	PublishedAt time.Time `json:"published_at"`
 }
 
+// LinkModel gives access to the links table, the per-user join onto articles.
 type LinkModel struct {
 	DB *sql.DB
 }
 
+// LinkFilters narrows a library listing. Every field is a pointer because all
+// three states matter: nil leaves the dimension alone, while a set value
+// restricts to it — so "unread only" and "read only" are both expressible
+// alongside "either".
 type LinkFilters struct {
 	IsRead    *bool
 	IsStarred *bool
@@ -237,6 +242,9 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 	return &link, nil
 }
 
+// Exists reports whether the user already has this article in their library.
+// The import path checks it before creating a link, so re-reading a feed does
+// not hand the same article to a user twice.
 func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64) (bool, error) {
 	query := `
 		SELECT EXISTS(
@@ -285,6 +293,9 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 	return err
 }
 
+// LinkUpdate is a partial write to a link's reading state. Nil fields are left
+// untouched, so a PATCH that only reports progress cannot clobber the read flag
+// a different tab set a moment earlier.
 type LinkUpdate struct {
 	IsRead                     *bool
 	IsStarred                  *bool
@@ -293,6 +304,8 @@ type LinkUpdate struct {
 	ReadingProgressAnchorIndex *int
 }
 
+// IsEmpty reports whether the update would write nothing, which the handler
+// rejects rather than turning into a query with no SET clause.
 func (u LinkUpdate) IsEmpty() bool {
 	return u.IsRead == nil && u.IsStarred == nil && u.Archived == nil &&
 		u.ReadingProgress == nil && u.ReadingProgressAnchorIndex == nil

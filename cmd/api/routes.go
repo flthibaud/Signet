@@ -43,16 +43,13 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/opml/imports/latest", app.latestOPMLImportHandler)
 	router.HandlerFunc(http.MethodGet, "/v1/opml/export", app.exportOPMLHandler)
 
-	// Articles d'un feed
-	// router.HandlerFunc(http.MethodGet, "/v1/subscriptions/:id/articles", app.listSubscriptionArticlesHandler)
-
-	// Liste des articles (tous les articles de tous les feeds, triés par date de publication)
+	// Every article across every feed the user subscribes to, newest first.
 	router.HandlerFunc(http.MethodGet, "/v1/links", app.listLinksHandler)
 
-	// Recherche full-text dans la bibliotheque de l'utilisateur
+	// Full-text search across the user's library.
 	router.HandlerFunc(http.MethodGet, "/v1/search", app.searchHandler)
 
-	// Recuperer le contenu d'un article
+	// One article's content, and its per-user reading state.
 	router.HandlerFunc(http.MethodGet, "/v1/links/:slug", app.getLinkHandler)
 	router.HandlerFunc(http.MethodPatch, "/v1/links/:slug", app.updateLinkHandler)
 

@@ -1,3 +1,16 @@
+// Package opml reads and writes OPML subscription lists, so a library can be
+// carried in from another reader or taken out of this one. It depends on
+// nothing else in the project.
+//
+// Attributes are matched case-insensitively. encoding/xml matches them exactly,
+// which means a file writing xmlURL rather than xmlUrl would have its feed URL
+// dropped silently — a subscription lost in a way the user cannot see, since
+// the import reports success.
+//
+// Nested outlines are flattened: the levels of a branch are joined with
+// FolderSeparator into one folder name, up to maxFolderDepth, because folders
+// here are flat. Trees deeper than maxNestingDepth are refused with ErrTooDeep,
+// the file being an upload and the parser recursive.
 package opml
 
 import (

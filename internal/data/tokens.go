@@ -14,9 +14,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// Token scopes. The scope is part of every lookup, so a token minted for one
+// purpose cannot be replayed against another.
 const (
 	ScopeActivation     = "activation"
-	ScopeAuthentication = "authentication" // Include a new authentication scope.
+	ScopeAuthentication = "authentication"
 )
 
 // tokenEntropyBytes is how much CSPRNG output backs a token: 128 bits, far
@@ -33,7 +35,9 @@ var tokenEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 // checking a stale literal.
 var tokenPlaintextLength = tokenEncoding.EncodedLen(tokenEntropyBytes)
 
-// Add struct tags to control how the struct appears when encoded to JSON.
+// Token is an authentication credential. Plaintext exists only in the response
+// that issues the token — only Hash is stored, so a dump of the tokens table
+// yields nothing that can be presented as a credential.
 type Token struct {
 	Plaintext string    `json:"token"`
 	Hash      []byte    `json:"-"`
@@ -92,12 +96,13 @@ func ValidateTokenPlaintext(v *validator.Validator, tokenPlaintext string) {
 	v.Check(len(tokenPlaintext) == tokenPlaintextLength, "token", fmt.Sprintf("must be %d characters long", tokenPlaintextLength))
 }
 
+// TokenModel gives access to the tokens table.
 type TokenModel struct {
 	DB *sql.DB
 }
 
-// The New() method is a shortcut which creates a new Token struct and then inserts the
-// data in the tokens table.
+// New mints a token for the user and stores it, returning it with its Plaintext
+// set — the only moment that value exists, since only the hash is persisted.
 func (m TokenModel) New(userID uuid.UUID, ttl time.Duration, scope string) (*Token, error) {
 	token, err := generateToken(userID, ttl, scope)
 	if err != nil {
@@ -107,7 +112,7 @@ func (m TokenModel) New(userID uuid.UUID, ttl time.Duration, scope string) (*Tok
 	return token, err
 }
 
-// Insert() adds the data for a specific token to the tokens table.
+// Insert stores a token. Most callers want New, which generates one first.
 func (m TokenModel) Insert(token *Token) error {
 	query := `
 		INSERT INTO tokens (hash, user_id, expiry, scope)
@@ -122,7 +127,7 @@ func (m TokenModel) Insert(token *Token) error {
 	return err
 }
 
-// DeleteAllForUser() deletes all tokens for a specific user and scope. This is
+// DeleteAllForUser deletes every token a user holds in a scope. This is
 // the "sign out everywhere" hammer — an ordinary logout uses DeleteByHash so it
 // only ends the session that asked.
 func (m TokenModel) DeleteAllForUser(scope string, userID uuid.UUID) error {

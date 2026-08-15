@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrAlreadySubscribed reports that the user is already subscribed to the feed.
+// Handlers turn it into a 409 rather than silently creating a second row.
 var ErrAlreadySubscribed = errors.New("already subscribed to this feed")
 
 type feedStore interface {
@@ -38,6 +40,16 @@ func cancelledByShutdown(ctx context.Context, err error) bool {
 	return ctx.Err() != nil && errors.Is(err, context.Canceled)
 }
 
+// SubscriptionService owns the subscribe sequence: resolve or create the feed,
+// insert the subscription, and import the feed's articles in the background.
+//
+// It depends on the narrow store interfaces declared above rather than on
+// data.Models, so it can be driven with fakes in tests; data.FeedModel and
+// data.SubscriptionModel satisfy them as they are.
+//
+// It holds its own context and WaitGroup because the article import outlives
+// the request that triggered it — the HTTP request's context is cancelled the
+// moment the response is written. Shutdown is what cancels those goroutines.
 type SubscriptionService struct {
 	feeds   feedStore
 	subs    subscriptionStore
@@ -48,6 +60,8 @@ type SubscriptionService struct {
 	wg      sync.WaitGroup
 }
 
+// NewSubscriptionService builds the service with a context of its own for the
+// background imports. Pair it with Shutdown.
 func NewSubscriptionService(models data.Models, feedSvc *FeedService, logger *jsonlog.Logger) *SubscriptionService {
 	ctx, cancel := context.WithCancel(context.Background())
 

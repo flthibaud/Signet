@@ -214,6 +214,9 @@ type fetchStatusError struct {
 	url    string
 }
 
+// Error renders the status and the URL that produced it. The type is exported
+// through errors.As so the escalation ladder can branch on the status rather
+// than on the message.
 func (e *fetchStatusError) Error() string {
 	return "fetch " + e.url + ": status " + strconv.Itoa(e.status)
 }

@@ -1,3 +1,10 @@
+// Package validator collects the problems with one request's input instead of
+// stopping at the first, so a 422 can name every bad field at once and the
+// frontend can attach each message to its own form control.
+//
+// A Validator is filled by the handler that parsed the request, then handed to
+// failedValidationResponse, which writes its Errors map as the {field: message}
+// error envelope.
 package validator
 
 import (
@@ -5,46 +12,51 @@ import (
 	"regexp"
 )
 
-// Declare a regular expression for sanity checking the format of email addresses (we'll
-// use this later in the book). If you're interested, this regular expression pattern is
-// taken from https://html.spec.whatwg.org/#valid-e-mail-address. Note: if you're
-// reading this in PDF or EPUB format and cannot see the full pattern, please see the
-// note further down the page.
+// EmailRX matches the HTML specification's definition of a valid email address
+// (https://html.spec.whatwg.org/#valid-e-mail-address).
+//
+// It is a syntax check, not a deliverability one: no pattern can tell whether
+// an address receives mail, so this only rejects input that cannot be an
+// address at all.
 var (
 	EmailRX = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
 )
 
-// Define a new Validator type which contains a map of validation errors.
+// Validator accumulates validation failures, one message per field. Create it
+// with New; the zero value's map is nil and AddError would panic on it.
 type Validator struct {
 	Errors map[string]string
 }
 
-// New is a helper which creates a new Validator instance with an empty errors map.
+// New returns a Validator with no errors recorded.
 func New() *Validator {
 	return &Validator{Errors: make(map[string]string)}
 }
 
-// Valid returns true if the errors map doesn't contain any entries.
+// Valid reports whether nothing failed, and so whether the handler may proceed.
 func (v *Validator) Valid() bool {
 	return len(v.Errors) == 0
 }
 
-// AddError adds an error message to the map (so long as no entry already exists for
-// the given key).
+// AddError records message against key, keeping the first message added for a
+// given key. Later checks on the same field therefore cannot overwrite the
+// earliest, most specific reason it was rejected.
 func (v *Validator) AddError(key, message string) {
 	if _, exists := v.Errors[key]; !exists {
 		v.Errors[key] = message
 	}
 }
 
-// Check adds an error message to the map only if a validation check is not 'ok'.
+// Check records message against key when ok is false. It is the usual entry
+// point: a handler runs every Check it has, then tests Valid once.
 func (v *Validator) Check(ok bool, key, message string) {
 	if !ok {
 		v.AddError(key, message)
 	}
 }
 
-// Generic function which returns true if a specific value is in a list.
+// PermittedValue reports whether value is one of permittedValues — for fields
+// that accept a fixed set, such as a sort key or a status.
 func PermittedValue[T comparable](value T, permittedValues ...T) bool {
 	for i := range permittedValues {
 		if value == permittedValues[i] {
@@ -59,7 +71,7 @@ func Matches(value string, rx *regexp.Regexp) bool {
 	return rx.MatchString(value)
 }
 
-// Generic function which returns true if all values in a slice are unique.
+// Unique reports whether values contains no duplicates.
 func Unique[T comparable](values []T) bool {
 	uniqueValues := make(map[T]bool)
 	for _, value := range values {

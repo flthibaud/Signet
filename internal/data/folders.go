@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrDuplicateFolder reports that the user already has a folder by that name.
+// Names are unique per user, not globally.
 var ErrDuplicateFolder = errors.New("duplicate folder")
 
 // folderNameConstraint is the unique index backing "one folder name per user".
@@ -27,6 +29,7 @@ type Folder struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// FolderModel gives access to the folders table.
 type FolderModel struct {
 	DB *sql.DB
 }
@@ -80,6 +83,9 @@ func (m FolderModel) Get(ctx context.Context, userID uuid.UUID, id int64) (*Fold
 	return &folder, nil
 }
 
+// Insert creates a folder and sets its generated ID and CreatedAt. Returns
+// ErrDuplicateFolder if the user already has one by that name. Use GetOrCreate
+// instead where an existing folder should be reused rather than reported.
 func (m FolderModel) Insert(ctx context.Context, folder *Folder) error {
 	query := `
 		INSERT INTO folders (user_id, name)
@@ -100,6 +106,9 @@ func (m FolderModel) Insert(ctx context.Context, folder *Folder) error {
 	return nil
 }
 
+// Update renames a folder. Returns ErrDuplicateFolder if the new name is taken,
+// and ErrRecordNotFound if the folder does not exist or belongs to someone else
+// — the two are not distinguished.
 func (m FolderModel) Update(ctx context.Context, userID uuid.UUID, id int64, name string) error {
 	query := `
 		UPDATE folders

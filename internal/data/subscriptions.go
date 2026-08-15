@@ -8,6 +8,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Subscription ties one user to one feed and carries what that user changed
+// about it: an overridden title or icon, and the folder it is filed under.
+// FolderID is nil for an unfiled subscription.
+//
+// The FeedID and FolderID scalars are hidden from JSON in favour of the
+// embedded Feed and Folder, which listing queries populate by join — clients
+// read the objects, never the raw IDs.
 type Subscription struct {
 	ID          int64     `json:"id"`
 	UserID      uuid.UUID `json:"-"`
@@ -21,10 +28,14 @@ type Subscription struct {
 	UnreadCount int       `json:"unread_count"`
 }
 
+// SubscriptionModel gives access to the subscriptions table.
 type SubscriptionModel struct {
 	DB *sql.DB
 }
 
+// Exists reports whether the user is already subscribed to the feed. The
+// subscribe path checks it up front so an existing subscription is reported as
+// such instead of breaching the unique constraint.
 func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error) {
 	query := `
 		SELECT EXISTS (
@@ -40,6 +51,9 @@ func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID 
 	return exists, nil
 }
 
+// GetAllForUser returns the user's subscriptions with their feed, their folder
+// (nil when unfiled) and their unread count, in one query — the sidebar needs
+// all three, and fetching the counts separately would be a query per feed.
 func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) ([]*Subscription, error) {
 	query := `
 		SELECT 
@@ -184,6 +198,9 @@ func (m SubscriptionModel) SetFolder(ctx context.Context, userID uuid.UUID, id i
 	return checkOneRow(result)
 }
 
+// Insert creates the subscription and sets its generated ID and CreatedAt.
+// Callers reach it through service.SubscriptionService, which owns the wider
+// sequence — resolving the feed, and removing it again if this write fails.
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
 	query := `
 		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, folder_id, created_at)

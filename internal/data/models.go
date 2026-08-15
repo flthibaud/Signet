@@ -4,8 +4,9 @@ import (
 	"database/sql"
 )
 
-// Create a Models struct which wraps the ArticleModel. We'll add other models to this,
-// like a UserModel and PermissionModel, as our build progresses.
+// Models is the data layer's single entry point: one field per entity, each a
+// model wrapping the same *sql.DB. The application struct holds one of these,
+// so a handler reaches any table through app.models.
 type Models struct {
 	Users         UserModel
 	Feeds         FeedModel
@@ -17,8 +18,8 @@ type Models struct {
 	OPMLImports   OPMLImportModel
 }
 
-// For ease of use, we also add a New() method which returns a Models struct containing
-// the initialized Models.
+// NewModels returns the set of models, all sharing db and therefore its
+// connection pool.
 func NewModels(db *sql.DB) Models {
 	return Models{
 		Users:         UserModel{DB: db},

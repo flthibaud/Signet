@@ -1,6 +1,8 @@
 # Signet
 
 [![CI](https://github.com/flthibaud/Signet/actions/workflows/ci.yml/badge.svg)](https://github.com/flthibaud/Signet/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/flthibaud/Signet)](https://go.dev/)
+[![License](https://img.shields.io/github/license/flthibaud/Signet)](./LICENSE)
 
 A self-hosted **read-it-later** app with native **RSS/Atom** support, written in **Go** (API) and **React Router v7** (frontend).
 
@@ -23,6 +25,8 @@ The goal is a lightweight, self-hostable alternative: a single Go binary (fronte
 
 - Sign-up / sign-in by email, with a Bearer token **or** an httpOnly cookie
 - Subscribe to RSS/Atom feeds, with articles imported as soon as you subscribe
+- **Folders** to organize subscriptions, flat and one level deep
+- **OPML import / export**: bring a library over from another reader, or take yours out. The import runs as a background job you can follow, since every entry costs a feed fetch
 - **Background synchronization**: worker pool, every 15 min by default (`SCHEDULER_INTERVAL`), with ETag / `If-Modified-Since` and per-domain rate limiting
 - **Content extraction** via readability then conversion to markdown, falling back to the RSS description
 - **Anti-bot fetching**: browser TLS fingerprint by default, optional browser sidecar for JS challenges ([docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md))
@@ -92,15 +96,25 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `RATE_LIMITER_ENABLED` | `false` | Per-IP rate limiting on `/v1/*` |
 | `RATE_LIMITER_RPS` | `5` | Requests per second per IP |
 | `RATE_LIMITER_BURST` | `10` | Bucket size |
+| `TRUSTED_PROXY_COUNT` | `0` | How many reverse proxies sit in front. See below — the default is wrong behind one |
 | `SCHEDULER_INTERVAL` | `15m` | Feed synchronization period |
 | `SCHEDULER_WORKERS` | `5` | Concurrent sync workers |
 | `SCHEDULER_BATCH_SIZE` | `50` | Feeds processed per tick |
+| `SESSION_TTL` | `720h` | Session **idle** timeout; the expiry slides forward while the session is used |
+| `HSTS_MAX_AGE` | `31536000` | HSTS lifetime in seconds; `0` disables the header. Only ever sent over HTTPS |
+| `FETCH_ALLOW_PRIVATE_NETWORKS` | `false` | Let feed/article fetches reach private addresses. Cloud metadata stays blocked either way |
 | `TLS_IMPERSONATE_ENABLED` | `true` | Browser TLS fingerprint for article scraping |
 | `SOLVER_URL` | `` | Browser sidecar (FlareSolverr contract); empty = disabled |
 | `SOLVER_TIMEOUT` | `60s` | Budget for one browser solve |
 | `SOLVER_MAX_PER_FEED` | `5` | Cap on solves per feed run |
 
 The rate limiter is **disabled by default**: a self-hoster serving a handful of trusted users does not need it. It only applies to `/v1/*`.
+
+### Behind a reverse proxy
+
+`TRUSTED_PROXY_COUNT` is the one variable whose default is wrong for most deployments. It says how many proxies sit between the internet and the binary: `0` when it is directly exposed, `1` behind a single Traefik/Caddy/Coolify, `2` with a CDN on top of that.
+
+The rate limiter buckets on the *N*th `X-Forwarded-For` entry counted **from the right**. Left at `0` behind a proxy, every request looks like it comes from the proxy and all your users share one bucket. Reading the header from the left instead would make it trivially spoofable, which is why this is a count and not a list of trusted addresses. Overestimating is harmless; underestimating is not. Details in the *Identification du client derrière un proxy* section of [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development
 
@@ -162,13 +176,29 @@ Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `POST` | `/v1/tokens/authentication` | No | Sign-in |
 | `DELETE` | `/v1/tokens/authentication` | Yes | Sign-out |
 | `GET` | `/v1/users/me` | Yes | Current user |
-| `GET` | `/v1/subscriptions` | Yes | List subscriptions |
+| `GET` | `/v1/subscriptions` | Yes | List subscriptions, with their folder and unread count |
 | `POST` | `/v1/subscriptions` | Yes | Subscribe to a feed |
+| `PATCH` | `/v1/subscriptions/:id` | Yes | File a subscription — `folder_id`, or `null` to unfile it |
 | `DELETE` | `/v1/subscriptions/:id` | Yes | Unsubscribe (keeps the articles) |
+| `GET` | `/v1/folders` | Yes | List folders |
+| `POST` | `/v1/folders` | Yes | Create a folder |
+| `PATCH` | `/v1/folders/:id` | Yes | Rename a folder |
+| `DELETE` | `/v1/folders/:id` | Yes | Delete a folder (its subscriptions become unfiled) |
+| `POST` | `/v1/opml/import` | Yes | Upload a subscription list — `202`, then follow the job |
+| `GET` | `/v1/opml/imports/latest` | Yes | Progress of the user's most recent import |
+| `GET` | `/v1/opml/export` | Yes | Download the subscriptions as OPML |
 | `GET` | `/v1/links` | Yes | Articles, paginated — `is_read`, `is_starred`, `archived`, `feed_id` filters |
 | `GET` | `/v1/links/:slug` | Yes | Article detail |
 | `PATCH` | `/v1/links/:slug` | Yes | Update the reading state |
 | `GET` | `/v1/search` | Yes | Full-text search — see below |
+
+### OPML import
+
+`POST /v1/opml/import` answers `202 Accepted` with a job, not with the subscriptions: each entry costs an HTTP fetch of its feed, so a list of several hundred cannot be handled inside one request. The client follows it through `GET /v1/opml/imports/latest`, which reports per-entry results as they land.
+
+The upload is capped at 2 MB and 1000 entries, and only the latest import per user is kept. Nested outlines are flattened into a single folder name, since folders here are flat. Entries whose `xmlUrl` is missing or unusable are skipped rather than failing the file.
+
+One user, one import at a time: starting a new one replaces the previous record.
 
 ### Full-text search
 
@@ -237,8 +267,11 @@ signet/
 ├── cmd/api/            # HTTP handlers, middleware, routes
 ├── internal/
 │   ├── data/           # Data access layer (the only one doing SQL)
-│   ├── service/        # RSS fetcher, anti-bot scraping, scheduler
+│   ├── service/        # RSS fetcher, anti-bot scraping, scheduler, OPML import
+│   ├── opml/           # OPML reading/writing, independent of the rest
 │   ├── readability/    # Content extraction → markdown
+│   ├── safedial/       # SSRF guard on every outbound fetch
+│   ├── env/            # Environment parsing, collecting every error at once
 │   ├── validator/      # Input validation
 │   └── jsonlog/        # Structured JSON logging
 ├── frontend/           # React Router application (SPA)
@@ -253,6 +286,9 @@ signet/
 
 ## Documentation
 
+The README and the code comments are in English; the `docs/` deep-dives are in French.
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Getting a development environment up, and the PR process
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Detailed architecture
 - [docs/RSS_SYNC.md](docs/RSS_SYNC.md) — RSS synchronization flow
 - [docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md) — Anti-bot fetching (TLS impersonation, browser sidecar)

@@ -2,6 +2,11 @@ package data
 
 import "strings"
 
+// SimpleTextSearchConfig is the neutral, unaccented configuration used when a
+// language has no stemmer, or none could be determined. It indexes words as
+// written, so it matches what the user literally typed at the cost of any
+// morphology — which is also why every article's tsvector includes a half built
+// with it, alongside the one built with its own language.
 const SimpleTextSearchConfig = "simple_ua"
 
 // textSearchConfigs maps a BCP-47 primary subtag to the unaccent-enabled

@@ -31,6 +31,13 @@ const (
 		", MaxWords=32, MinWords=12, MaxFragments=1, FragmentDelimiter= … "
 )
 
+// SearchResult is one hit. Snippet is the ts_headline extract, with matched
+// terms wrapped in the HighlightStart/HighlightEnd markers — plain text the
+// frontend splits on, never HTML, so a match inside an article cannot inject a
+// tag into the results list.
+//
+// Rank is only meaningful within one response: it scores a result against this
+// query, not against anything else.
 type SearchResult struct {
 	ID          int64      `json:"id"`
 	Slug        string     `json:"slug"`

@@ -51,6 +51,8 @@ type OPMLImport struct {
 	FinishedAt *time.Time         `json:"finished_at"`
 }
 
+// OPMLImportModel gives access to the opml_imports table, which tracks
+// subscription-list imports while they run in the background.
 type OPMLImportModel struct {
 	DB *sql.DB
 }

@@ -7,12 +7,14 @@ import (
 	"github.com/flthibaud/signet/internal/data"
 )
 
-// Define a custom contextKey type, with the underlying type string.
+// contextKey is unexported so that no other package can produce a key equal to
+// one of the constants below, which is what keeps these values out of reach of
+// anything but this package.
 type contextKey string
 
-// Convert the string "user" to a contextKey type and assign it to the userContextKey
-// constant. We'll use this constant as the key for getting and setting user information
-// in the request context.
+// userContextKey holds the *data.User the request authenticated as, set by
+// authenticate. It is always present on a request that reached a handler —
+// AnonymousUser when no token was supplied.
 const userContextKey = contextKey("user")
 
 // nonceContextKey holds the per-request CSP nonce set by secureHeaders.
@@ -24,18 +26,19 @@ const nonceContextKey = contextKey("nonce")
 // travels rather than the plaintext, so the secret stops at the middleware.
 const tokenHashContextKey = contextKey("token_hash")
 
-// The contextSetUser() method returns a new copy of the request with the provided
-// User struct added to the context. Note that we use our userContextKey constant as the
-// key.
+// contextSetUser returns a copy of r carrying user. Called by authenticate on
+// every request, including anonymous ones.
 func (app *application) contextSetUser(r *http.Request, user *data.User) *http.Request {
 	ctx := context.WithValue(r.Context(), userContextKey, user)
 	return r.WithContext(ctx)
 }
 
-// The contextGetUser() retrieves the User struct from the request context. The only
-// time that we'll use this helper is when we logically expect there to be User struct
-// value in the context, and if it doesn't exist it will firmly be an 'unexpected' error.
-// As we discussed earlier in the book, it's OK to panic in those circumstances.
+// contextGetUser returns the user the request authenticated as.
+//
+// A missing value cannot happen on a served request — authenticate runs ahead
+// of the router and always sets one — so it is a wiring bug rather than a
+// runtime condition, and panicking surfaces it in development instead of
+// letting a handler act on a nil user. recoverPanic turns it into a 500.
 func (app *application) contextGetUser(r *http.Request) *data.User {
 	user, ok := r.Context().Value(userContextKey).(*data.User)
 	if !ok {
@@ -44,6 +47,8 @@ func (app *application) contextGetUser(r *http.Request) *data.User {
 	return user
 }
 
+// contextSetTokenHash returns a copy of r carrying the hash of the token it
+// authenticated with.
 func (app *application) contextSetTokenHash(r *http.Request, hash []byte) *http.Request {
 	ctx := context.WithValue(r.Context(), tokenHashContextKey, hash)
 	return r.WithContext(ctx)
@@ -57,6 +62,8 @@ func (app *application) contextGetTokenHash(r *http.Request) []byte {
 	return hash
 }
 
+// contextSetNonce returns a copy of r carrying the CSP nonce generated for this
+// response.
 func (app *application) contextSetNonce(r *http.Request, nonce string) *http.Request {
 	ctx := context.WithValue(r.Context(), nonceContextKey, nonce)
 	return r.WithContext(ctx)

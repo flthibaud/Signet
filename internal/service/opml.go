@@ -65,6 +65,9 @@ type OPMLService struct {
 	wg     sync.WaitGroup
 }
 
+// NewOPMLService builds the service with a context of its own, since an import
+// runs in the background well past the upload request that started it. Pair it
+// with Shutdown. The scheduler is wired in afterwards through SetSyncTrigger.
 func NewOPMLService(models data.Models, subs subscriber, logger *jsonlog.Logger) *OPMLService {
 	ctx, cancel := context.WithCancel(context.Background())
 
