@@ -1,10 +1,10 @@
-// Package signet is the module root. It holds no logic — only the two
-// go:embed declarations that make the binary self-contained: the built frontend
-// and the SQL migrations.
+// Package signet is the module root. It holds no logic — only the two embed
+// declarations that make the binary self-contained: the built frontend and the
+// SQL migrations.
 //
-// They live here rather than beside their consumers because go:embed cannot
-// reach outside its own directory, and both trees sit at the repository root.
-// The application itself is cmd/api.
+// They live here rather than beside their consumers because an embed directive
+// cannot reach outside its own directory, and both trees sit at the repository
+// root. The application itself is cmd/api.
 package signet
 
 import "embed"
