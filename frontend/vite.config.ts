@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [tailwindcss(), reactRouter(), tsconfigPaths()],
     server: {
+      host: true,
+      port: 5173,
       proxy: {
         "/v1": {
           target: apiTarget,

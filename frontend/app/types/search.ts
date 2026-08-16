@@ -9,7 +9,8 @@ export interface SearchResult {
   reading_time_minutes: number;
   is_read: boolean;
   is_starred: boolean;
-  is_archived: boolean;
+  /** ISO timestamp, or null when the link is not archived. */
+  archived_at: string | null;
   saved_at: string;
   published_at: string;
   rank: number;

@@ -1,75 +1,79 @@
 # Signet
 
 [![CI](https://github.com/flthibaud/Signet/actions/workflows/ci.yml/badge.svg)](https://github.com/flthibaud/Signet/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/flthibaud/Signet)](https://go.dev/)
+[![License](https://img.shields.io/github/license/flthibaud/Signet)](./LICENSE)
 
-Une application **read-it-later** self-hosted avec support natif des flux **RSS/Atom**, écrite en **Go** (API) et **React Router v7** (frontend).
+A self-hosted **read-it-later** app with native **RSS/Atom** support, written in **Go** (API) and **React Router v7** (frontend).
 
-## À propos
+## About
 
-Ce projet est **inspiré d'[Omnivore](https://github.com/omnivore-app/omnivore)**, un excellent lecteur read-it-later open-source que j'utilisais au quotidien mais qui n'est **plus maintenu** depuis sa fermeture fin 2024 (suite au rachat par ElevenLabs).
+This project is **inspired by [Omnivore](https://github.com/omnivore-app/omnivore)**, an excellent open-source read-it-later reader I used daily, which has been **unmaintained** since it shut down in late 2024 (following the ElevenLabs acquisition).
 
-L'objectif est de proposer une alternative légère, self-hostable, avec un seul binaire Go (frontend embarqué via `go:embed`) et une base PostgreSQL. L'accent est mis sur :
+The goal is a lightweight, self-hostable alternative: a single Go binary (frontend embedded via `go:embed`) and a PostgreSQL database. The focus is on:
 
-- **La simplicité de déploiement** : un binaire, une base de données, c'est tout
-- **Le support RSS natif** : les flux RSS/Atom sont des citoyens de première classe
-- **La déduplication** : un article sauvé par *N* utilisateurs n'est stocké qu'une seule fois
-- **La lecture** : extraction du contenu via readability, sanitization, temps de lecture estimé
+- **Deployment simplicity**: one binary, one database, that's it
+- **Native RSS support**: RSS/Atom feeds are first-class citizens
+- **Deduplication**: an article saved by *N* users is stored only once
+- **Reading**: content extraction via readability, sanitization, estimated reading time
 
 ![feeds display on homepage](docs/resources/feeds-homepage.png "Feeds")
 
 ![feeds details](docs/resources/feed-details.png "Feeds Details")
 
-## Fonctionnalités
+## Features
 
-- Inscription / connexion par email, avec token Bearer **ou** cookie httpOnly
-- Abonnement à des flux RSS/Atom, import des articles dès l'abonnement
-- **Synchronisation en tâche de fond** : pool de workers, toutes les 15 min, avec ETag / `If-Modified-Since` et rate limit par domaine
-- **Extraction du contenu** via readability puis conversion en markdown, avec repli sur la description RSS
-- **Fetch anti-bot** : fingerprint TLS de navigateur par défaut, sidecar navigateur optionnel pour les challenges JS ([docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md))
-- **Déduplication** : l'article est stocké une fois, `links` porte l'état par utilisateur
-- État de lecture par utilisateur : lu, favori, archivé, progression, slug unique
-- **Recherche full-text** multilingue et insensible aux accents, avec filtres par flux et par date
-- Rate limiting par IP sur l'API (`/v1/*` uniquement, désactivé par défaut)
+- Sign-up / sign-in by email, with a Bearer token **or** an httpOnly cookie
+- Subscribe to RSS/Atom feeds, with articles imported as soon as you subscribe
+- **Folders** to organize subscriptions, flat and one level deep
+- **OPML import / export**: bring a library over from another reader, or take yours out. The import runs as a background job you can follow, since every entry costs a feed fetch
+- **Background synchronization**: worker pool, every 15 min by default (`SCHEDULER_INTERVAL`), with ETag / `If-Modified-Since` and per-domain rate limiting
+- **Content extraction** via readability then conversion to markdown, falling back to the RSS description
+- **Anti-bot fetching**: browser TLS fingerprint by default, optional browser sidecar for JS challenges ([docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md))
+- **Deduplication**: the article is stored once, `links` carries the per-user state
+- Per-user reading state: read, favorite, archived, progress, unique slug
+- **Full-text search**, multilingual and accent-insensitive, with per-feed and per-date filters
+- Per-IP rate limiting on the API (`/v1/*` only, disabled by default)
 
-## Démarrage rapide
+## Quick start
 
-Le plus court chemin, tout en conteneurs :
+The shortest path, fully containerized:
 
 ```bash
 cp .env.example .env
 docker compose up -d
 ```
 
-L'image applicative est tirée depuis GHCR (`ghcr.io/flthibaud/signet`), publiée par la CI : `latest` suit `master`, `dev` suit `develop`. Rien n'est compilé sur place, donc ce fichier fonctionne tel quel sur un NAS ou un VPS sans toolchain. Pour un déploiement durable, épingler un tag de version dans `SIGNET_TAG` plutôt que de suivre `latest` : tirer une image plus récente applique ses migrations au redémarrage suivant, et une migration ne se rejoue pas à l'envers.
+The application image is pulled from GHCR (`ghcr.io/flthibaud/signet`), published by CI: released versions are tagged `0.2.0` and `0.2`, `latest` tracks the newest stable release, and `dev` tracks the `develop` branch. Nothing is compiled locally, so this file works as-is on a NAS or a VPS with no toolchain. For a lasting deployment, pin a version in `SIGNET_TAG` (`SIGNET_TAG=0.2.0`) rather than following `latest`: pulling a newer image applies its migrations on the next restart, and a migration does not replay backwards. `GET /v1/healthcheck` reports the version an instance is actually running; the [releases page](https://github.com/flthibaud/Signet/releases) says what changed between two of them.
 
-L'application écoute sur <http://localhost:8000>. Le binaire embarque ses migrations SQL et met la base à niveau lui-même au démarrage : il n'y a pas d'étape de migration à lancer avant, ni de service dédié dans le compose. Une base vide suffit.
+The app listens on <http://localhost:8000>. The binary embeds its SQL migrations and brings the database up to date itself at startup: there is no migration step to run beforehand, and no dedicated service in the compose file. An empty database is enough.
 
-Le conteneur applicatif tourne sous un utilisateur non privilégié, avec un système de fichiers racine en lecture seule (seul `/tmp` est un tmpfs) : rien n'est écrit sur disque, tout l'état vit dans Postgres. Son healthcheck interroge `/v1/readiness`, qui échoue si la base est injoignable.
+The application container runs as an unprivileged user with a read-only root filesystem (only `/tmp` is a tmpfs): nothing is written to disk, all state lives in Postgres. Its healthcheck queries `/v1/readiness`, which fails if the database is unreachable.
 
-### Utiliser sa propre base PostgreSQL
+### Using your own PostgreSQL database
 
-Le service `db` du compose est là pour dépanner : identifiants fixes, aucun port publié, joignable par la seule app. Pour brancher une base existante — managée, ou déjà présente — il suffit de renseigner `DATABASE_URL` dans le `.env` et de supprimer le service `db` du compose, plus rien d'autre n'y fait référence :
+The compose file's `db` service is there to get you going: fixed credentials, no published port, reachable only by the app. To point at an existing database — managed, or already running — just set `DATABASE_URL` in `.env` and remove the `db` service from the compose file; nothing else refers to it:
 
 ```bash
-DATABASE_URL="postgres://user:motdepasse@monhote:5432/signet?sslmode=require"
+DATABASE_URL="postgres://user:password@myhost:5432/signet?sslmode=require"
 ```
 
-C'est le seul réglage de base de données : il n'y a pas de variables d'hôte, d'utilisateur ou de mot de passe séparées à accorder entre elles.
+That is the only database setting: there are no separate host, user or password variables to keep in sync with one another.
 
 ```bash
 docker compose logs -f app
-docker compose pull && docker compose up -d   # mise à jour
-docker compose down          # ajouter -v pour supprimer aussi le volume Postgres
+docker compose pull && docker compose up -d   # update
+docker compose down          # add -v to also delete the Postgres volume
 ```
 
-Pour faire tourner le compose sur une image construite depuis le working tree — tester une modif avant de la pousser — il suffit de la tagger sous le même nom :
+To run the compose file against an image built from the working tree — testing a change before pushing it — tag it under the same name:
 
 ```bash
 docker build -t ghcr.io/flthibaud/signet:local .
 SIGNET_TAG=local docker compose up -d
 ```
 
-Le sidecar navigateur pour l'anti-bot est **optionnel** et derrière un profil, car il embarque un navigateur complet :
+The browser sidecar for anti-bot fetching is **optional** and behind a profile, since it ships a full browser:
 
 ```bash
 echo 'SOLVER_URL=http://solver:8191/v1' >> .env
@@ -78,203 +82,235 @@ docker compose --profile solver up -d
 
 ## Configuration
 
-Toutes les variables ont un défaut sain : seule `DATABASE_URL` est obligatoire. Le binaire refuse de démarrer sur une valeur invalide plutôt que de retomber silencieusement sur zéro.
+Every variable has a sane default: only `DATABASE_URL` is required. The binary refuses to start on an invalid value rather than silently falling back to zero.
 
-| Variable | Défaut | Description |
+| Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | — | **Requis.** DSN PostgreSQL |
-| `DATABASE_MAX_OPEN_CONNS` | `25` | Connexions ouvertes max (`0` = illimité) |
-| `DATABASE_MAX_IDLE_CONNS` | `25` | Connexions inactives conservées |
-| `DATABASE_MAX_IDLE_TIME` | `15m` | Durée avant fermeture d'une connexion inactive |
-| `AUTO_MIGRATE` | `true` | Applique les migrations en attente au démarrage |
-| `PORT` | `8000` | Port d'écoute HTTP |
-| `ENV` | `` | Nom de l'environnement, remonté par le healthcheck |
-| `RATE_LIMITER_ENABLED` | `false` | Rate limiting par IP sur `/v1/*` |
-| `RATE_LIMITER_RPS` | `5` | Requêtes par seconde et par IP |
-| `RATE_LIMITER_BURST` | `10` | Taille du seau |
-| `SCHEDULER_INTERVAL` | `15m` | Période de synchronisation des flux |
-| `SCHEDULER_WORKERS` | `5` | Workers de synchronisation concurrents |
-| `SCHEDULER_BATCH_SIZE` | `50` | Flux traités par tick |
-| `TLS_IMPERSONATE_ENABLED` | `true` | Fingerprint TLS de navigateur pour le scraping d'articles |
-| `SOLVER_URL` | `` | Sidecar navigateur (contrat FlareSolverr) ; vide = désactivé |
-| `SOLVER_TIMEOUT` | `60s` | Budget d'un solve navigateur |
-| `SOLVER_MAX_PER_FEED` | `5` | Plafond de solves par run de flux |
+| `DATABASE_URL` | — | **Required.** PostgreSQL DSN |
+| `DATABASE_MAX_OPEN_CONNS` | `25` | Max open connections (`0` = unlimited) |
+| `DATABASE_MAX_IDLE_CONNS` | `25` | Idle connections kept around |
+| `DATABASE_MAX_IDLE_TIME` | `15m` | Time before an idle connection is closed |
+| `AUTO_MIGRATE` | `true` | Applies pending migrations at startup |
+| `PORT` | `8000` | HTTP listen port |
+| `ENV` | `` (`production` via compose) | Environment name; `production` enables the `Secure` flag on the auth cookie |
+| `RATE_LIMITER_ENABLED` | `false` | Per-IP rate limiting on `/v1/*` |
+| `RATE_LIMITER_RPS` | `5` | Requests per second per IP |
+| `RATE_LIMITER_BURST` | `10` | Bucket size |
+| `TRUSTED_PROXY_COUNT` | `0` | How many reverse proxies sit in front. See below — the default is wrong behind one |
+| `SCHEDULER_INTERVAL` | `15m` | Feed synchronization period |
+| `SCHEDULER_WORKERS` | `5` | Concurrent sync workers |
+| `SCHEDULER_BATCH_SIZE` | `50` | Feeds processed per tick |
+| `SESSION_TTL` | `720h` | Session **idle** timeout; the expiry slides forward while the session is used |
+| `REGISTRATION_ENABLED` | `false` | Whether anyone can sign up. Closed, `POST /v1/users` returns 403 and the sign-up tab is hidden; the first account stays creatable while the instance has none |
+| `HSTS_MAX_AGE` | `31536000` | HSTS lifetime in seconds; `0` disables the header. Only ever sent over HTTPS |
+| `FETCH_ALLOW_PRIVATE_NETWORKS` | `false` | Let feed/article fetches reach private addresses. Cloud metadata stays blocked either way |
+| `TLS_IMPERSONATE_ENABLED` | `true` | Browser TLS fingerprint for article scraping |
+| `SOLVER_URL` | `` | Browser sidecar (FlareSolverr contract); empty = disabled |
+| `SOLVER_TIMEOUT` | `60s` | Budget for one browser solve |
+| `SOLVER_MAX_PER_FEED` | `5` | Cap on solves per feed run |
 
-Le rate limiter est **désactivé par défaut** : un self-hoster servant quelques utilisateurs de confiance n'en a pas besoin. Il ne s'applique qu'à `/v1/*`.
+The rate limiter is **disabled by default**: a self-hoster serving a handful of trusted users does not need it. It only applies to `/v1/*`.
 
-## Développement
+Registration is **closed by default**, so an instance you put on the internet does not hand out accounts to whoever finds it. Sign-ups stay open while the database holds no user, which is what lets you create your own account on a fresh install — after that the door shuts on its own. Set `REGISTRATION_ENABLED=true` to open it to other people.
+
+### Behind a reverse proxy
+
+`TRUSTED_PROXY_COUNT` is the one variable whose default is wrong for most deployments. It says how many proxies sit between the internet and the binary: `0` when it is directly exposed, `1` behind a single Traefik/Caddy/Coolify, `2` with a CDN on top of that.
+
+The rate limiter buckets on the *N*th `X-Forwarded-For` entry counted **from the right**. Left at `0` behind a proxy, every request looks like it comes from the proxy and all your users share one bucket. Reading the header from the left instead would make it trivially spoofable, which is why this is a count and not a list of trusted addresses. Overestimating is harmless; underestimating is not. Details in the *Identification du client derrière un proxy* section of [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Development
 
 ### Devcontainer
 
-Le projet fournit un [devcontainer](.devcontainer/devcontainer.json) (VSCode / GitHub Codespaces) avec Go, Node.js/pnpm et PostgreSQL préconfigurés :
+The project ships a [devcontainer](.devcontainer/devcontainer.json) (VSCode / GitHub Codespaces) with Go, Node.js/pnpm and PostgreSQL preconfigured:
 
 > *VSCode → `Dev Containers: Reopen in Container`*
 
-### En local
+### Locally
 
-Prérequis : Go 1.25+, Node.js 22+ avec pnpm, PostgreSQL 14+. Le CLI [golang-migrate](https://github.com/golang-migrate/migrate) n'est nécessaire que pour les cibles `make migrate-*` ci-dessous — créer une migration, faire un rollback, forcer une version. Le serveur, lui, applique les migrations tout seul.
+Requirements: Go 1.25+, Node.js 22+ with pnpm, PostgreSQL 14+. The [golang-migrate](https://github.com/golang-migrate/migrate) CLI is only needed for the `make migrate-*` targets below — creating a migration, rolling back, forcing a version. The server itself applies migrations on its own.
 
 ```bash
-go run ./cmd/api                      # migre puis sert l'API + le frontend embarqué, port 8000
+go run ./cmd/api                      # migrates, then serves the API + embedded frontend, port 8000
 
-cd frontend && pnpm install && pnpm dev   # dev server Vite, port 5173, HMR
+cd frontend && pnpm install && pnpm dev   # Vite dev server, port 5173, HMR
 ```
 
-En développement, travailler sur <http://localhost:5173> : le dev server Vite proxifie `/v1` vers l'API Go (`VITE_API_TARGET`, défaut `http://localhost:8000`). Le navigateur voit donc tout sur une même origine, ce qui fait fonctionner les cookies d'auth sans configuration CORS.
+In development, work on <http://localhost:5173>: the Vite dev server proxies `/v1` to the Go API (`VITE_API_TARGET`, default `http://localhost:8000`). The browser therefore sees everything on a single origin, which makes the auth cookies work without any CORS configuration.
 
-Le binaire Go sert le SPA **depuis le build embarqué** : pour voir des changements frontend sur le port 8000, il faut relancer `pnpm build` puis rebuilder le binaire.
+The Go binary serves the SPA **from the embedded build**: to see frontend changes on port 8000, you need to re-run `pnpm build` and rebuild the binary.
 
 ```bash
-make migrate-create name=add_x        # nouvelle paire up/down
-make migrate-down                     # rollback de la dernière migration
-make migrate-version                  # version actuelle
-make migrate-force version=N          # sortir d'un état « Dirty database »
-make reset-db                         # drop + re-run complet
-go test ./...                         # tests Go
-cd frontend && pnpm typecheck         # typegen react-router + tsc
+make migrate-create name=add_x        # new up/down pair
+make migrate-down                     # roll back the last migration
+make migrate-version                  # current version
+make migrate-force version=N          # recover from a "Dirty database" state
+make reset-db                         # full drop + re-run
+go test ./...                         # Go tests
+cd frontend && pnpm typecheck         # react-router typegen + tsc
 ```
 
-Le binaire et le CLI partagent la même table `schema_migrations` : les deux peuvent être mélangés sans risque de désaccord sur la version en place. Si une migration casse en cours de route, la base est marquée *dirty* et tout démarrage suivant échoue avec la marche à suivre — corriger le schéma à la main, puis `make migrate-force version=N`.
+The binary and the CLI share the same `schema_migrations` table: the two can be mixed with no risk of disagreeing on the version in place. If a migration breaks halfway through, the database is marked *dirty* and every subsequent startup fails with the steps to follow — fix the schema by hand, then `make migrate-force version=N`.
 
-### Build de production
+### Production build
 
 ```bash
-cd frontend && pnpm build && cd ..    # obligatoire : alimente le go:embed
+cd frontend && pnpm build && cd ..    # required: feeds the go:embed
 go build -o bin/api ./cmd/api
 ```
 
 ## Architecture
 
 - **Go 1.25** + [`httprouter`](https://github.com/julienschmidt/httprouter), PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
-- [`gofeed`](https://github.com/mmcdole/gofeed) (RSS/Atom), [`go-readability`](https://codeberg.org/readeck/go-readability) (extraction), [`bluemonday`](https://github.com/microcosm-cc/bluemonday) (sanitization), [`tls-client`](https://github.com/bogdanfinn/tls-client) (fingerprint navigateur)
-- **React 19** + **React Router v7** en **mode SPA** (`ssr: false`), **TailwindCSS v4**, **TanStack Query**, **react-hook-form** + **zod**
-- Schéma PostgreSQL avec triggers et `citext`. La recherche full-text s'appuie sur un `tsvector` multilingue et insensible aux accents, maintenu par colonne générée et pondéré titre/description/contenu, exposé par `GET /v1/search`.
+- [`gofeed`](https://github.com/mmcdole/gofeed) (RSS/Atom), [`go-readability`](https://codeberg.org/readeck/go-readability) (extraction), [`bluemonday`](https://github.com/microcosm-cc/bluemonday) (sanitization), [`tls-client`](https://github.com/bogdanfinn/tls-client) (browser fingerprint)
+- **React 19** + **React Router v7** in **SPA mode** (`ssr: false`), **TailwindCSS v4**, **TanStack Query**, **react-hook-form** + **zod**
+- PostgreSQL schema with triggers and `citext`. Full-text search relies on a multilingual, accent-insensitive `tsvector`, maintained by a generated column and weighted across title/description/content, exposed by `GET /v1/search`.
 
-Détails dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Endpoints
 
-| Méthode | Route | Auth | Description |
+| Method | Route | Auth | Description |
 |---|---|---|---|
-| `GET` | `/v1/healthcheck` | Non | Liveness — le process répond (ne touche aucune dépendance) |
-| `GET` | `/v1/readiness` | Non | Readiness — `200` si la base est joignable, `503` sinon |
-| `POST` | `/v1/users` | Non | Inscription |
-| `POST` | `/v1/tokens/authentication` | Non | Connexion |
-| `DELETE` | `/v1/tokens/authentication` | Oui | Déconnexion |
-| `GET` | `/v1/users/me` | Oui | Utilisateur courant |
-| `GET` | `/v1/subscriptions` | Oui | Liste des abonnements |
-| `POST` | `/v1/subscriptions` | Oui | S'abonner à un flux |
-| `DELETE` | `/v1/subscriptions/:id` | Oui | Se désabonner (conserve les articles) |
-| `GET` | `/v1/links` | Oui | Articles, paginés — filtres `is_read`, `is_starred`, `archived`, `feed_id` |
-| `GET` | `/v1/links/:slug` | Oui | Détail d'un article |
-| `PATCH` | `/v1/links/:slug` | Oui | Mettre à jour l'état de lecture |
-| `GET` | `/v1/search` | Oui | Recherche full-text — voir ci-dessous |
+| `GET` | `/v1/healthcheck` | No | Liveness — the process responds (touches no dependency) |
+| `GET` | `/v1/readiness` | No | Readiness — `200` if the database is reachable, `503` otherwise |
+| `POST` | `/v1/users` | No | Sign-up |
+| `POST` | `/v1/tokens/authentication` | No | Sign-in |
+| `DELETE` | `/v1/tokens/authentication` | Yes | Sign-out |
+| `GET` | `/v1/users/me` | Yes | Current user |
+| `GET` | `/v1/subscriptions` | Yes | List subscriptions, with their folder and unread count |
+| `POST` | `/v1/subscriptions` | Yes | Subscribe to a feed |
+| `PATCH` | `/v1/subscriptions/:id` | Yes | File a subscription — `folder_id`, or `null` to unfile it |
+| `DELETE` | `/v1/subscriptions/:id` | Yes | Unsubscribe (keeps the articles) |
+| `GET` | `/v1/folders` | Yes | List folders |
+| `POST` | `/v1/folders` | Yes | Create a folder |
+| `PATCH` | `/v1/folders/:id` | Yes | Rename a folder |
+| `DELETE` | `/v1/folders/:id` | Yes | Delete a folder (its subscriptions become unfiled) |
+| `POST` | `/v1/opml/import` | Yes | Upload a subscription list — `202`, then follow the job |
+| `GET` | `/v1/opml/imports/latest` | Yes | Progress of the user's most recent import |
+| `GET` | `/v1/opml/export` | Yes | Download the subscriptions as OPML |
+| `GET` | `/v1/links` | Yes | Articles, paginated — `is_read`, `is_starred`, `archived`, `feed_id` filters |
+| `GET` | `/v1/links/:slug` | Yes | Article detail |
+| `PATCH` | `/v1/links/:slug` | Yes | Update the reading state |
+| `GET` | `/v1/search` | Yes | Full-text search — see below |
 
-### Recherche full-text
+### OPML import
 
-`GET /v1/search` interroge la bibliothèque de l'utilisateur via l'index `tsvector`
-d'`articles` (titre pondéré A, description B, contenu C).
+`POST /v1/opml/import` answers `202 Accepted` with a job, not with the subscriptions: each entry costs an HTTP fetch of its feed, so a list of several hundred cannot be handled inside one request. The client follows it through `GET /v1/opml/imports/latest`, which reports per-entry results as they land.
 
-| Paramètre | Description |
+The upload is capped at 2 MB and 1000 entries, and only the latest import per user is kept. Nested outlines are flattened into a single folder name, since folders here are flat. Entries whose `xmlUrl` is missing or unusable are skipped rather than failing the file.
+
+One user, one import at a time: starting a new one replaces the previous record.
+
+### Full-text search
+
+`GET /v1/search` queries the user's library through the `tsvector` index on
+`articles` (title weighted A, description B, content C).
+
+| Parameter | Description |
 |---|---|
-| `q` | Requête (syntaxe `websearch_to_tsquery` : `"phrase exacte"`, `-exclusion`, `or`). Le dernier terme est traité comme un préfixe, pour la recherche au fil de la frappe. Vide = les articles récents, triés par date de publication. Entre 2 et 200 caractères. |
-| `lang` | Locale du chercheur (`fr-FR`, `en`…), pour le stemming de la requête. À défaut, l'en-tête `Accept-Language` ; à défaut, configuration neutre |
-| `feed_id`, `is_read`, `is_starred` | Mêmes filtres que `/v1/links` |
-| `archived` | Tri-état : absent = toute la bibliothèque (archivés inclus), contrairement à `/v1/links` |
-| `since` | Borne inférieure RFC3339 sur la **date de publication** — le client la calcule dans son fuseau |
-| `page`, `page_size` | Pagination (défaut 20, max 100) |
+| `q` | Query (`websearch_to_tsquery` syntax: `"exact phrase"`, `-exclusion`, `or`). The last term is treated as a prefix, for search-as-you-type. Empty = recent articles, sorted by publication date. Between 2 and 200 characters. |
+| `lang` | The searcher's locale (`fr-FR`, `en`…), for query stemming. Failing that, the `Accept-Language` header; failing that, the neutral configuration |
+| `feed_id`, `is_read`, `is_starred` | Same filters as `/v1/links` |
+| `archived` | Tri-state: absent = the whole library (archived included), unlike `/v1/links` |
+| `since` | RFC3339 lower bound on the **publication date** — the client computes it in its own timezone |
+| `page`, `page_size` | Pagination (default 20, max 100) |
 
-La réponse ne renvoie **pas** de total exact, mais un booléen `has_more`. Compter
-tous les résultats obligerait Postgres à les parcourir entièrement pour produire
-un nombre dont seule la présence d'une page suivante est utile.
+The response does **not** return an exact total, but a `has_more` boolean. Counting
+every result would force Postgres to walk all of them to produce a number whose
+only useful part is whether there is a next page.
 
-Le tri par pertinence ne peut pas s'arrêter tôt : connaître les 20 meilleurs
-impose de scorer tous les résultats. Le classement ne porte donc que sur les
-**1000 correspondances publiées le plus récemment** (`searchRankCandidates`), bornage qui
-rend le coût constant quelle que soit la taille de la bibliothèque. En
-contrepartie, un article très pertinent mais plus ancien que ce seuil peut sortir
-d'une recherche très large — et la pagination ne va pas au-delà de 1000
-résultats.
+Relevance sorting cannot stop early: knowing the top 20 requires scoring every
+result. Ranking therefore only covers the **1000 most recently published
+matches** (`searchRankCandidates`), a bound that keeps the cost constant whatever
+the size of the library. In exchange, a highly relevant article older than that
+threshold can drop out of a very broad search — and pagination does not go beyond
+1000 results.
 
-Les dates affichées et filtrées sont celles de **publication**, jamais celles
-d'import : un abonnement à un flux horodate tous les articles récupérés à la même
-seconde, ce qui classerait un article vieux de trois semaines dans « aujourd'hui ».
-`links.published_at` duplique la colonne d'`articles` pour que ce tri passe par un
-index (migration `000010`).
+The dates displayed and filtered on are **publication** dates, never import
+dates: subscribing to a feed stamps every fetched article with the same second,
+which would file a three-week-old article under "today". `links.published_at`
+duplicates the column from `articles` so that this sort can use an index
+(migration `000010`).
 
-Chaque résultat porte un `snippet` produit par `ts_headline`, où les termes trouvés
-sont encadrés par `[[hl]]` / `[[/hl]]`. Ce sont des marqueurs texte, jamais du HTML :
-le frontend les découpe pour rendre un `<mark>` sans injecter de balise.
+Each result carries a `snippet` produced by `ts_headline`, where the matched terms
+are wrapped in `[[hl]]` / `[[/hl]]`. Those are text markers, never HTML: the
+frontend splits on them to render a `<mark>` without injecting any tag.
 
-### Multilingue et accents
+### Multilingual and accents
 
-Chaque article porte sa propre configuration de recherche (`articles.language`),
-déduite du `<language>` du flux à l'import. Son `tsv` est **hybride** : le texte
-est indexé deux fois, une fois avec la langue de l'article, une fois avec la
-configuration neutre `simple_ua`. Côté requête, les deux moitiés sont interrogées
-et combinées par `|`.
+Each article carries its own search configuration (`articles.language`), derived
+from the feed's `<language>` at import time. Its `tsv` is **hybrid**: the text is
+indexed twice, once with the article's language, once with the neutral `simple_ua`
+configuration. On the query side, both halves are queried and combined with `|`.
 
-C'est ce qui évite d'avoir à deviner la langue de la requête : la moitié neutre
-matche ce que l'utilisateur a littéralement tapé, quelle que soit la langue, et la
-moitié stemmée ajoute la morphologie de **sa** locale. Un francophone qui cherche
-« objets connectes » trouve ainsi un article contenant « objet connecté » — sans
-`lang`, la même requête ne renvoie rien.
+That is what avoids having to guess the query's language: the neutral half matches
+what the user literally typed, whatever the language, and the stemmed half adds
+the morphology of **their** locale. A French speaker searching for
+"objets connectes" thus finds an article containing "objet connecté" — without
+`lang`, the same query returns nothing.
 
-Toutes les configurations passent par `unaccent` (suffixe `_ua`), donc « hebergee »
-trouve « hébergée » et « Zuge » trouve « Züge », dans les deux sens.
+Every configuration goes through `unaccent` (suffix `_ua`), so "hebergee" finds
+"hébergée" and "Zuge" finds "Züge", in both directions.
 
-> **Limite connue — CJK.** Le parser de Postgres découpe sur les espaces : en
-> japonais et en chinois, une phrase entière devient un seul lexème et la
-> recherche partielle ne trouve rien. Ces langues retombent sur `simple_ua`, ce
-> qui ne les répare pas. Les corriger demanderait des bigrammes applicatifs ou
-> PGroonga (indisponible sur Postgres standard). Le coréen, l'arabe, le russe et
-> toutes les langues à séparateurs fonctionnent normalement.
+> **Known limitation — CJK.** Postgres's parser splits on whitespace: in Japanese
+> and Chinese, a whole sentence becomes a single lexeme and partial search finds
+> nothing. Those languages fall back to `simple_ua`, which does not fix them.
+> Fixing them would require application-level bigrams or PGroonga (unavailable on
+> stock Postgres). Korean, Arabic, Russian and every language with separators work
+> normally.
 
-Les erreurs suivent une enveloppe unique : `{"error": ...}`, une chaîne pour les erreurs génériques, un objet `{champ: message}` pour les 422 de validation.
+Errors follow a single envelope: `{"error": ...}`, a string for generic errors, an object `{field: message}` for validation 422s.
 
-## Structure du projet
+## Project structure
 
 ```
 signet/
-├── cmd/api/            # Handlers HTTP, middleware, routes
+├── cmd/api/            # HTTP handlers, middleware, routes
 ├── internal/
-│   ├── data/           # Couche d'accès aux données (seule à faire du SQL)
-│   ├── service/        # Fetcher RSS, scraping anti-bot, scheduler
-│   ├── readability/    # Extraction de contenu → markdown
-│   ├── validator/      # Validation des entrées
-│   └── jsonlog/        # Logging JSON structuré
-├── frontend/           # Application React Router (SPA)
-├── migrations/         # Migrations SQL (golang-migrate)
-├── docs/               # Documentation technique
-├── frontend.go         # go:embed du build frontend
-├── migrations.go       # go:embed des migrations SQL
-├── docker-compose.yml  # app + PostgreSQL + sidecar optionnel
-├── Dockerfile          # build multi-stages
-└── Makefile            # helpers de migration
+│   ├── data/           # Data access layer (the only one doing SQL)
+│   ├── service/        # RSS fetcher, anti-bot scraping, scheduler, OPML import
+│   ├── opml/           # OPML reading/writing, independent of the rest
+│   ├── readability/    # Content extraction → markdown
+│   ├── safedial/       # SSRF guard on every outbound fetch
+│   ├── env/            # Environment parsing, collecting every error at once
+│   ├── validator/      # Input validation
+│   └── jsonlog/        # Structured JSON logging
+├── frontend/           # React Router application (SPA)
+├── migrations/         # SQL migrations (golang-migrate)
+├── docs/               # Technical documentation
+├── frontend.go         # go:embed of the frontend build
+├── migrations.go       # go:embed of the SQL migrations
+├── docker-compose.yml  # app + PostgreSQL + optional sidecar
+├── Dockerfile          # multi-stage build
+└── Makefile            # migration helpers
 ```
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Architecture détaillée
-- [docs/RSS_SYNC.md](docs/RSS_SYNC.md) — Flux de synchronisation RSS
-- [docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md) — Fetch anti-bot (TLS imperso, sidecar navigateur)
-- [docs/READABILITY_TESTING.md](docs/READABILITY_TESTING.md) — Tests du parser readability
-- [docs/schema.sql](docs/schema.sql) — Schéma complet de la BDD
+The README and the code comments are in English; the `docs/` deep-dives are in French.
 
-## Licence
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Getting a development environment up, and the PR process
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Detailed architecture
+- [docs/RSS_SYNC.md](docs/RSS_SYNC.md) — RSS synchronization flow
+- [docs/ANTIBOT_FETCHING.md](docs/ANTIBOT_FETCHING.md) — Anti-bot fetching (TLS impersonation, browser sidecar)
+- [docs/READABILITY_TESTING.md](docs/READABILITY_TESTING.md) — Readability parser tests
+- [docs/schema.sql](docs/schema.sql) — Complete database schema
 
-Signet est distribué sous licence **[GNU AGPL-3.0-or-later](LICENSE)**.
+## License
+
+Signet is distributed under the **[GNU AGPL-3.0-or-later](LICENSE)** license.
 
 Copyright (C) 2026 Florian Thibaud
 
-Concrètement : vous êtes libre d'utiliser, modifier et redistribuer Signet, y
-compris pour vos propres besoins ou ceux de votre organisation. En contrepartie,
-si vous distribuez une version modifiée **ou si vous la proposez à des tiers via
-un réseau** (hébergement, SaaS), vous devez en publier le code source sous la
-même licence.
+In practice: you are free to use, modify and redistribute Signet, including for
+your own needs or those of your organization. In return, if you distribute a
+modified version **or offer it to third parties over a network** (hosting, SaaS),
+you must publish its source code under the same license.
 
-L'auto-hébergement pour soi, sa famille ou son équipe n'impose rien : cette
-clause vise la mise à disposition d'un service à des utilisateurs tiers.
+Self-hosting for yourself, your family or your team requires nothing: that clause
+targets making a service available to third-party users.
 
-Le nom et le logo **Signet** ne sont pas couverts par la licence — voir
+The **Signet** name and logo are not covered by the license — see
 [NOTICE.md](NOTICE.md).

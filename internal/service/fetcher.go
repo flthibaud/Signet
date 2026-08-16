@@ -3,8 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,30 +17,62 @@ import (
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/jsonlog"
 	readabilitymd "github.com/flthibaud/signet/internal/readability"
+	"github.com/flthibaud/signet/internal/safedial"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"
 	"golang.org/x/time/rate"
 )
 
+// Errors a caller can act on when resolving a feed URL. ErrInvalidFeed means
+// the document was fetched but is not RSS or Atom; ErrFeedNotFound means it
+// could not be fetched at all. Both are the user's mistake rather than the
+// server's, so handlers report them as a 4xx.
 var (
 	ErrInvalidFeed  = errors.New("invalid feed format")
 	ErrFeedNotFound = errors.New("feed not found or unreachable")
 )
 
 // UserAgent is the User-Agent sent on RSS fetches. It matches the browser the
-// scraper impersonates (see browserUserAgent) so we never announce two different
+// scraper impersonates so we never announce two different
 // browsers from the same deployment.
 const UserAgent = browserUserAgent
 
 // feedProcessTimeout bounds how long a single feed sync may run. It must stay
-// below the GetFeedsToSync lock window (10 minutes) so we always release the
-// feed before another worker considers the lock stale and reclaims it.
+// below data.SyncLockWindow so we always release the feed before another worker
+// considers the lock stale and reclaims it.
 const feedProcessTimeout = 8 * time.Minute
 
 // scrapeTimeout bounds a single article fetch, whichever transport handles it.
 const scrapeTimeout = 30 * time.Second
 
+// maxFeedBytes bounds how much of a feed document we pull into memory.
+const maxFeedBytes = 8 << 20
+
+// maxFaviconBytes bounds the homepage HTML we parse to find <link rel="icon">.
+const maxFaviconBytes = 1 << 20
+
+// faviconTimeout bounds the favicon lookup. It is a cosmetic extra on top of a
+// feed the user is waiting for, so it gets far less patience than the fetch.
+const faviconTimeout = 10 * time.Second
+
+var errFeedTooLarge = errors.New("feed body exceeds size limit")
+
+func readFeedBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxFeedBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxFeedBytes {
+		return nil, errFeedTooLarge
+	}
+	return body, nil
+}
+
+// FeedService fetches and parses feeds, extracts article content, and writes
+// the results through the data layer. One instance is shared by the HTTP
+// handlers and the scheduler's workers, so its fields must stay safe for
+// concurrent use.
 type FeedService struct {
 	models      data.Models
 	client      *http.Client
@@ -66,15 +96,35 @@ type FeedService struct {
 	// challengedHosts remembers hosts that answered with an anti-bot challenge,
 	// so their other articles skip straight to the sidecar.
 	challengedHosts sync.Map // map[string]time.Time (expiry)
+
+	// guard vets the address every outbound fetch resolves to. Feed and article
+	// URLs are user-supplied, so without it the service is an SSRF proxy into
+	// the deployment's own network.
+	guard *safedial.Guard
 }
 
+// NewFeedService builds the service and every HTTP client it fetches with.
+//
+// A failure to construct the impersonating transport is logged rather than
+// returned: the service falls back to the stdlib client, which fetches most
+// sites fine, and refusing to start the whole app over a degraded scraper would
+// be the worse trade.
 func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig) *FeedService {
 	cfg.setDefaults()
 
-	client := &http.Client{Timeout: scrapeTimeout}
+	guard := safedial.NewGuard(cfg.AllowPrivateNetworks)
+
+	// Every fetch in this service goes through this client or through one of the
+	// two fetchers below, and all three carry the guard's dialer. The one
+	// exception is the solver's own client, which talks to the sidecar rather
+	// than to a user-supplied URL.
+	client := &http.Client{
+		Timeout:   scrapeTimeout,
+		Transport: guard.Transport(scrapeTimeout),
+	}
 	stdlib := &stdlibFetcher{client: client}
 
-	scrape, err := newScrapeFetcher(cfg.TLSImpersonate, scrapeTimeout, stdlib)
+	scrape, err := newScrapeFetcher(cfg.TLSImpersonate, scrapeTimeout, guard, stdlib)
 	if err != nil && logger != nil {
 		logger.PrintError(err, nil)
 	}
@@ -88,19 +138,22 @@ func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig)
 		fetchCfg:     cfg,
 		scrape:       scrape,
 		scrapeStdlib: stdlib,
+		guard:        guard,
 	}
 
 	if cfg.SolverURL != "" {
-		s.solver = newSolverClient(cfg.SolverURL, cfg.SolverTimeout)
+		s.solver = newSolverClient(cfg.SolverURL, cfg.SolverTimeout, guard)
 	}
 
 	return s
 }
 
-// CreateFromURL crée un feed depuis une URL RSS
+// CreateFromURL fetches an RSS/Atom document, reads its metadata and stores the
+// feed. Returns ErrFeedNotFound if the URL could not be fetched, or
+// ErrInvalidFeed if what came back is not a feed.
 func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.Feed, error) {
-	// 1. Fetch le RSS (avec User-Agent : certains serveurs rejettent les
-	// requêtes sans en-tête UA).
+	// 1. Fetch the feed. The User-Agent is explicit because some servers reject
+	// requests that arrive without one.
 	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrFeedNotFound, err)
@@ -127,16 +180,21 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 		body = bytes.NewReader(retried)
 	}
 
-	// 2. Parse le RSS
-	parsedFeed, err := s.parser.Parse(body)
+	// 2. Parse the document.
+	raw, err := readFeedBody(body)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidFeed, err)
 	}
 
-	// 3. Extrait les métadonnées
+	parsedFeed, err := s.parser.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidFeed, err)
+	}
+
+	// 3. Extract the metadata.
 	imageURL := getFeedImageURL(parsedFeed)
 	if imageURL == "" && parsedFeed.Link != "" {
-		imageURL = fetchFaviconURL(s.client, parsedFeed.Link)
+		imageURL = fetchFaviconURL(ctx, s.client, parsedFeed.Link)
 	}
 
 	feed := &data.Feed{
@@ -149,7 +207,7 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 		CreatedAt:     time.Now(),
 	}
 
-	// 4. Insert en base
+	// 4. Store it.
 	err = s.models.Feeds.Insert(ctx, feed)
 	if err != nil {
 		return nil, err
@@ -193,10 +251,17 @@ func plainText(s string) string {
 	return strings.TrimSpace(html.UnescapeString(stripped))
 }
 
-// createArticleFromItem crée un article depuis un RSS item. `language` est une
-// configuration de recherche PostgreSQL déjà résolue, pas un tag de langue brut.
-func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, hash, language string) (*data.Article, error) {
-	parsed, err := s.fetchWithReadability(ctx, item.Link)
+// createArticleFromItem builds an article from a feed item.
+//
+// link is the URL settled on for the item (see itemURL) and hash its
+// deduplication key. The link is stored as it came: normalization exists only
+// to compute the hash, so that the same page reached through two feeds collapses
+// to one article without the stored URL being rewritten under the user.
+//
+// language is an already-resolved PostgreSQL text search configuration, not a
+// raw language tag — it is interpolated into the insert as a regconfig.
+func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, link, hash, language string) (*data.Article, error) {
+	parsed, err := s.fetchWithReadability(ctx, link)
 
 	var title, originalHTML, textContent string
 
@@ -213,9 +278,8 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
 	}
 
-	// Crée l'article
 	article := &data.Article{
-		Url:          item.Link,
+		Url:          link,
 		Hash:         hash,
 		Title:        title,
 		Description:  plainText(item.Description),
@@ -281,7 +345,12 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	}
 
 	// 5. Parse feed
-	parsedFeed, err := s.parser.Parse(resp.Body)
+	raw, err := readFeedBody(resp.Body)
+	if err != nil {
+		return s.markFailed(ctx, feed.ID, fmt.Errorf("feed %d: %w", feed.ID, err))
+	}
+
+	parsedFeed, err := s.parser.Parse(bytes.NewReader(raw))
 	if err != nil {
 		return s.markFailed(ctx, feed.ID, err)
 	}
@@ -307,10 +376,10 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	// 8. Process each item. If any item fails, we must NOT persist the new
 	// ETag/Last-Modified, otherwise the next fetch gets a 304 and the items we
 	// missed are never retried.
-	// La langue déclarée par le flux (<language>, xml:lang) est la source la plus
-	// fiable dont on dispose : elle est présente sur l'écrasante majorité des
-	// flux, et la deviner à partir du texte serait moins sûr. Absente, on
-	// retombe sur la configuration neutre.
+	// The language the feed declares (<language>, xml:lang) is the most reliable
+	// signal available: the overwhelming majority of feeds carry it, and
+	// guessing from the text would be less certain. Absent, this resolves to the
+	// neutral configuration.
 	feedLanguage := data.ResolveTextSearchConfig(parsedFeed.Language)
 
 	itemsFailed := false
@@ -322,7 +391,12 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 			break
 		}
 
-		hash := hashURL(item.Link)
+		link := itemURL(item.Link, item.GUID)
+		if link == "" {
+			continue
+		}
+
+		hash := hashURL(link)
 
 		// Check if article already exists
 		article, err := s.models.Articles.GetByHash(ctx, hash)
@@ -333,7 +407,7 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 
 		// Create article if new
 		if article == nil {
-			article, err = s.createArticleFromItem(ctx, item, hash, feedLanguage)
+			article, err = s.createArticleFromItem(ctx, item, link, hash, feedLanguage)
 			if err != nil {
 				itemsFailed = true
 				continue
@@ -365,6 +439,24 @@ func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *da
 	return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, newEtag, newLastModified)
 }
 
+// feedFailureThreshold is how many consecutive failures turn a feed off.
+const feedFailureThreshold = 10
+
+// FeedFetchError wraps a sync failure with the number of consecutive failures
+// the feed has now accumulated, so the caller can log how close it is to being
+// deactivated without reading the row back.
+type FeedFetchError struct {
+	Failures int
+	Err      error
+}
+
+// Error returns the underlying cause's message; the failure count is metadata
+// for the caller, not part of what a user is shown.
+func (e *FeedFetchError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the cause, so errors.Is and errors.As see through the wrapper.
+func (e *FeedFetchError) Unwrap() error { return e.Err }
+
 // markFailed records a feed failure (clearing the lock, incrementing the
 // counter, deactivating after the threshold) and returns an error mentioning
 // the deactivation so the caller logs it. The DB write uses a detached context
@@ -377,10 +469,10 @@ func (s *FeedService) markFailed(ctx context.Context, feedID int64, cause error)
 	if err != nil {
 		return errors.Join(cause, fmt.Errorf("marking feed %d failed: %w", feedID, err))
 	}
-	if failures >= 10 {
+	if failures >= feedFailureThreshold {
 		return fmt.Errorf("feed %d deactivated after %d consecutive failures: %w", feedID, failures, cause)
 	}
-	return cause
+	return &FeedFetchError{Failures: failures, Err: cause}
 }
 
 // estimateReadingTime returns an estimated reading time in minutes from the
@@ -406,19 +498,19 @@ func slugFromHash(hash string) string {
 	return hash
 }
 
-// fetchWithReadability récupère la page d'un article et en extrait le contenu.
+// fetchWithReadability fetches an article page and extracts its content.
 //
-// Le fetch passe par l'échelle anti-bot (voir fetchPage) : client TLS imitant un
-// navigateur, puis sidecar navigateur si un challenge JS persiste. Une erreur
-// ici fait retomber l'appelant sur le contenu de l'item RSS.
+// The fetch climbs the anti-bot ladder (see fetchPage): a browser-impersonating
+// TLS client first, then the browser sidecar if a JS challenge persists. An
+// error here makes the caller fall back to the RSS item's own content.
 func (s *FeedService) fetchWithReadability(ctx context.Context, articleURL string) (readability.Article, error) {
 	baseURL, err := url.Parse(articleURL)
 	if err != nil {
 		return readability.Article{}, err
 	}
 
-	// Respecte un rate limit par domaine pour ne pas marteler le site source
-	// quand on scrape plusieurs nouveaux articles du même flux.
+	// Rate limited per domain, so scraping several new articles from one feed
+	// does not hammer the site they came from.
 	if err := s.scrapeLimiter(baseURL.Host).Wait(ctx); err != nil {
 		return readability.Article{}, err
 	}
@@ -443,13 +535,6 @@ func (s *FeedService) scrapeLimiter(domain string) *rate.Limiter {
 	return actual.(*rate.Limiter)
 }
 
-// hashURL calcule le hash SHA256 d'une URL
-func hashURL(url string) string {
-	h := sha256.New()
-	h.Write([]byte(url))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
 func getFeedImageURL(feed *gofeed.Feed) string {
 	if feed.Image != nil {
 		return feed.Image.URL
@@ -457,9 +542,10 @@ func getFeedImageURL(feed *gofeed.Feed) string {
 	return ""
 }
 
-// fetchFaviconURL tente de récupérer l'URL du favicon d'un site.
-// Cherche d'abord un <link rel="icon"> dans le HTML, sinon fallback sur /favicon.ico.
-func fetchFaviconURL(client *http.Client, siteURL string) string {
+// fetchFaviconURL looks up a site's favicon, preferring a <link rel="icon"> in
+// the homepage HTML and falling back to /favicon.ico. Returns "" if neither can
+// be reached — a missing icon is cosmetic and never fails the surrounding work.
+func fetchFaviconURL(ctx context.Context, client *http.Client, siteURL string) string {
 	parsed, err := url.Parse(siteURL)
 	if err != nil {
 		return ""
@@ -467,7 +553,16 @@ func fetchFaviconURL(client *http.Client, siteURL string) string {
 
 	fallback := parsed.Scheme + "://" + parsed.Host + "/favicon.ico"
 
-	resp, err := client.Get(siteURL)
+	ctx, cancel := context.WithTimeout(ctx, faviconTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, siteURL, nil)
+	if err != nil {
+		return fallback
+	}
+	req.Header.Set("User-Agent", UserAgent)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fallback
 	}
@@ -477,13 +572,13 @@ func fetchFaviconURL(client *http.Client, siteURL string) string {
 		return fallback
 	}
 
-	doc, err := html.Parse(resp.Body)
+	doc, err := html.Parse(io.LimitReader(resp.Body, maxFaviconBytes))
 	if err != nil {
 		return fallback
 	}
 
 	if href := findIconLink(doc); href != "" {
-		// Résout les URLs relatives
+		// Resolve relative URLs against the site.
 		ref, err := url.Parse(href)
 		if err != nil {
 			return href

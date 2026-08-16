@@ -28,6 +28,55 @@ func TestTsqueryExpr(t *testing.T) {
 	}
 }
 
+// The config name is interpolated into the query text rather than bound, so an
+// unrecognized one must never reach it. Callers are meant to have resolved the
+// value already; this pins that the interpolation site does not depend on them
+// having done so.
+func TestTsqueryExprRejectsUnknownConfig(t *testing.T) {
+	hostile := `simple'); DROP TABLE users; --`
+
+	for _, config := range []string{hostile, "english", "", "nonexistent_ua"} {
+		expr := tsqueryExpr(2, config)
+
+		if !strings.Contains(expr, "'"+SimpleTextSearchConfig+"'") {
+			t.Errorf("tsqueryExpr(%q) must fall back to the neutral config, got %q", config, expr)
+		}
+		if strings.Contains(expr, config) && config != "" {
+			t.Errorf("tsqueryExpr(%q) leaked its argument into the SQL: %q", config, expr)
+		}
+	}
+}
+
+func TestSafeTextSearchConfig(t *testing.T) {
+	tests := []struct {
+		config string
+		want   string
+	}{
+		{"french_ua", "french_ua"},
+		{SimpleTextSearchConfig, SimpleTextSearchConfig},
+		{"french", SimpleTextSearchConfig},
+		{"fr", SimpleTextSearchConfig},
+		{"", SimpleTextSearchConfig},
+		{`x'); DELETE FROM links; --`, SimpleTextSearchConfig},
+	}
+
+	for _, tt := range tests {
+		if got := safeTextSearchConfig(tt.config); got != tt.want {
+			t.Errorf("safeTextSearchConfig(%q) = %q, want %q", tt.config, got, tt.want)
+		}
+	}
+}
+
+// Every name ResolveTextSearchConfig can produce must survive the safety check,
+// or a legitimate locale would silently lose its stemming.
+func TestResolveTextSearchConfigOutputIsAlwaysSafe(t *testing.T) {
+	for tag, config := range textSearchConfigs {
+		if got := safeTextSearchConfig(ResolveTextSearchConfig(tag)); got != config {
+			t.Errorf("tag %q resolves to %q but is downgraded to %q", tag, config, got)
+		}
+	}
+}
+
 func TestSearchQueryExpr(t *testing.T) {
 	t.Run("neutral language yields a single tsquery", func(t *testing.T) {
 		expr := searchQueryExpr(2, SimpleTextSearchConfig)

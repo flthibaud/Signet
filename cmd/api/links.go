@@ -10,11 +10,15 @@ import (
 
 func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request) {
 	user := app.contextGetUser(r)
-	p := app.readPagination(r)
+
+	p, err := app.readPagination(r)
+	if err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
 
 	qs := r.URL.Query()
 	var filters data.LinkFilters
-	var err error
 
 	if filters.IsRead, err = readOptionalBool(qs, "is_read"); err != nil {
 		app.badRequestResponse(w, r, err)
@@ -35,6 +39,10 @@ func (app *application) listLinksHandler(w http.ResponseWriter, r *http.Request)
 	}
 	filters.Archived = archived
 	if filters.FeedID, err = readOptionalInt64(qs, "feed_id"); err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
+	if filters.FolderID, err = readOptionalInt64(qs, "folder_id"); err != nil {
 		app.badRequestResponse(w, r, err)
 		return
 	}
@@ -129,7 +137,10 @@ func (app *application) updateLinkHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	if upd.IsEmpty() {
-		app.writeJSON(w, http.StatusOK, envelope{"message": "no changes applied"}, nil)
+		err = app.writeJSON(w, http.StatusOK, envelope{"message": "no changes applied"}, nil)
+		if err != nil {
+			app.serverErrorResponse(w, r, err)
+		}
 		return
 	}
 

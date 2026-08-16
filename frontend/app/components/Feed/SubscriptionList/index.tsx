@@ -1,11 +1,33 @@
 import { Loader2, Rss, Trash2 } from "lucide-react";
+import { Link } from "react-router";
 
+import Select from "~/components/Select";
 import { useSubscriptions, useUnsubscribe } from "~/lib/feeds";
-import type { Subscription } from "~/types/subscription";
+import { useFolders, useSetSubscriptionFolder } from "~/lib/folders";
+import type { Folder, Subscription } from "~/types/subscription";
+
+const NO_FOLDER = { id: "none", title: "No folder", folderId: null } as const;
+
+type FolderOption = { id: string; title: string; folderId: number | null };
+
+function folderOptions(folders: Folder[]): FolderOption[] {
+  return [
+    NO_FOLDER,
+    ...folders.map((folder) => ({
+      id: String(folder.id),
+      title: folder.name,
+      folderId: folder.id,
+    })),
+  ];
+}
 
 const SubscriptionList = () => {
   const { data, isPending, isError } = useSubscriptions();
   const unsubscribe = useUnsubscribe();
+  const { data: foldersData } = useFolders();
+  const setFolder = useSetSubscriptionFolder();
+
+  const options = folderOptions(foldersData?.folders ?? []);
 
   if (isPending) {
     return (
@@ -34,32 +56,45 @@ const SubscriptionList = () => {
   }
 
   return (
-    <ul className="mt-10 mx-auto max-w-126 flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
-      {subscriptions.map((sub) => (
-        <SubscriptionRow
-          key={sub.id}
-          subscription={sub}
-          onUnsubscribe={() => unsubscribe.mutate(sub.id)}
-          isRemoving={unsubscribe.isPending && unsubscribe.variables === sub.id}
-        />
-      ))}
-    </ul>
+    <div className="mt-10 mx-auto max-w-126">
+      <ul className="flex flex-col divide-y divide-gray-200 dark:divide-gray-700">
+        {subscriptions.map((sub) => (
+          <SubscriptionRow
+            key={sub.id}
+            subscription={sub}
+            options={options}
+            onMove={(folderId) => setFolder.mutate({ id: sub.id, folderId })}
+            onUnsubscribe={() => unsubscribe.mutate(sub.id)}
+            isRemoving={
+              unsubscribe.isPending && unsubscribe.variables === sub.id
+            }
+          />
+        ))}
+      </ul>
+    </div>
   );
 };
 
 type SubscriptionRowProps = {
   subscription: Subscription;
+  options: FolderOption[];
+  onMove: (folderId: number | null) => void;
   onUnsubscribe: () => void;
   isRemoving: boolean;
 };
 
 const SubscriptionRow = ({
   subscription,
+  options,
+  onMove,
   onUnsubscribe,
   isRemoving,
 }: SubscriptionRowProps) => {
-  const { feed, custom_title, unread_count } = subscription;
+  const { feed, custom_title, unread_count, folder } = subscription;
   const title = custom_title || feed.title || feed.url;
+  const current =
+    options.find((option) => option.folderId === (folder?.id ?? null)) ??
+    options[0];
 
   return (
     <li className="flex items-center gap-4 py-4">
@@ -80,9 +115,12 @@ const SubscriptionRow = ({
       )}
 
       <div className="flex-1 min-w-0">
-        <div className="font-semibold text-gray-900 dark:text-white truncate">
+        <Link
+          to={`/app?feed_id=${feed.id}`}
+          className="block font-semibold text-gray-900 dark:text-white truncate transition-colors hover:text-primary-1"
+        >
           {title}
-        </div>
+        </Link>
         {feed.site_url && (
           <a
             href={feed.site_url}
@@ -96,10 +134,18 @@ const SubscriptionRow = ({
       </div>
 
       {unread_count > 0 && (
-        <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-[#0084FF]/10 text-[#0084FF]">
+        <span className="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full bg-primary-1/10 text-primary-1">
           {unread_count}
         </span>
       )}
+
+      <Select
+        className="shrink-0 w-40 max-md:w-32"
+        small
+        items={options}
+        value={current}
+        onChange={(option: FolderOption) => onMove(option.folderId)}
+      />
 
       <button
         type="button"

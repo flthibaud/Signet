@@ -32,25 +32,48 @@ func (p Pagination) Offset() int {
 	return (p.Page - 1) * p.PageSize
 }
 
-// readPagination extracts page and page_size from query params with defaults and bounds.
-func (app *application) readPagination(r *http.Request) Pagination {
+const (
+	defaultPageSize = 20
+	maxPageSize     = 100
+
+	// maxOffset caps how deep a client may paginate. The list and search
+	// queries end in `ORDER BY ... LIMIT n OFFSET m`, which Postgres answers by
+	// walking and discarding the first m rows — cost grows with the offset, and
+	// nothing beyond a few hundred pages is a real user scrolling.
+	maxOffset = 10_000
+)
+
+// readPagination extracts page and page_size from query params with defaults
+// and bounds. Like the readOptional* helpers, it rejects values it cannot use
+// rather than silently falling back to the default.
+func (app *application) readPagination(r *http.Request) (Pagination, error) {
 	qs := r.URL.Query()
 
 	page := 1
 	if v := qs.Get("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			page = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return Pagination{}, errors.New("invalid page parameter: must be a positive integer")
 		}
+		page = n
 	}
 
-	pageSize := 20
+	pageSize := defaultPageSize
 	if v := qs.Get("page_size"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-			pageSize = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxPageSize {
+			return Pagination{}, fmt.Errorf("invalid page_size parameter: must be between 1 and %d", maxPageSize)
 		}
+		pageSize = n
 	}
 
-	return Pagination{Page: page, PageSize: pageSize}
+	// Division rather than (page-1)*pageSize so an in-range page that would
+	// overflow the multiplication is still caught here.
+	if page-1 > maxOffset/pageSize {
+		return Pagination{}, fmt.Errorf("invalid page parameter: must not skip more than %d records; narrow the query or raise page_size", maxOffset)
+	}
+
+	return Pagination{Page: page, PageSize: pageSize}, nil
 }
 
 // readOptionalBool parses an optional boolean query parameter. It returns nil
@@ -93,8 +116,10 @@ func readOptionalTime(qs url.Values, key string) (*time.Time, error) {
 	return &t, nil
 }
 
-// Retrieve the "id" URL parameter from the current request context, then convert it to
-// an integer and return it. If the operation isn't successful, return 0 and an error.
+// readIDParam returns the ":id" path segment as an int64. Zero and negative
+// values are rejected alongside unparseable ones, since no row this API exposes
+// has such an ID and letting one through would only turn into a "not found" a
+// query later.
 func (app *application) readIDParam(r *http.Request) (int64, error) {
 	params := httprouter.ParamsFromContext(r.Context())
 	id, err := strconv.ParseInt(params.ByName("id"), 10, 64)
@@ -104,6 +129,8 @@ func (app *application) readIDParam(r *http.Request) (int64, error) {
 	return id, nil
 }
 
+// readSlugParam returns the ":slug" path segment, which identifies a link
+// within one user's library.
 func (app *application) readSlugParam(r *http.Request) (string, error) {
 	params := httprouter.ParamsFromContext(r.Context())
 	slug := params.ByName("slug")
@@ -113,27 +140,26 @@ func (app *application) readSlugParam(r *http.Request) (string, error) {
 	return slug, nil
 }
 
-// Define a writeJSON() helper for sending responses. This takes the destination
-// http.ResponseWriter, the HTTP status code to send, the data to encode to JSON, and a
-// header map containing any additional HTTP headers we want to include in the response.
+// writeJSON sends data as the response body, with status and any extra headers
+// (headers may be nil).
+//
+// It marshals into a buffer before touching the ResponseWriter: encoding
+// straight into the writer would have already sent a 200 and a partial body by
+// the time an encoding error surfaced, leaving no way to report it. Returning
+// the error here lets the caller fall back to serverErrorResponse.
 func (app *application) writeJSON(w http.ResponseWriter, status int, data envelope, headers http.Header) error {
-	// Encode the data to JSON, returning the error if there was one.
 	js, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	// Append a newline to make it easier to view in terminal applications.
+
+	// A trailing newline, so the output is readable straight from a terminal.
 	js = append(js, '\n')
-	// At this point, we know that we won't encounter any more errors before writing the
-	// response, so it's safe to add any headers that we want to include. We loop
-	// through the header map and add each header to the http.ResponseWriter header map.
-	// Note that it's OK if the provided header map is nil. Go doesn't throw an error
-	// if you try to range over (or generally, read from) a nil map.
+
 	for key, value := range headers {
 		w.Header()[key] = value
 	}
-	// Add the "Content-Type: application/json" header, then write the status code and
-	// JSON response.
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(js)
@@ -141,8 +167,12 @@ func (app *application) writeJSON(w http.ResponseWriter, status int, data envelo
 	return nil
 }
 
+// readJSON decodes the request body into dst, returning errors phrased for the
+// client rather than Go's default decoder messages, which leak type names.
+//
+// The body is capped at 1MB and unknown fields are refused, so a typo in a
+// field name is reported instead of being silently ignored.
 func (app *application) readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	// Use http.MaxBytesReader() to limit the size of the request body to 1MB.
 	maxBytes := 1_048_576
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 

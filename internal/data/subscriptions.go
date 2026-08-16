@@ -8,24 +8,34 @@ import (
 	"github.com/google/uuid"
 )
 
+// Subscription ties one user to one feed and carries what that user changed
+// about it: an overridden title or icon, and the folder it is filed under.
+// FolderID is nil for an unfiled subscription.
+//
+// The FeedID and FolderID scalars are hidden from JSON in favour of the
+// embedded Feed and Folder, which listing queries populate by join — clients
+// read the objects, never the raw IDs.
 type Subscription struct {
 	ID          int64     `json:"id"`
 	UserID      uuid.UUID `json:"-"`
 	FeedID      int64     `json:"-"`
 	CustomTitle *string   `json:"custom_title"`
 	CustomIcon  *string   `json:"custom_icon"`
-	// Category    *string   `json:"category"`
-	CreatedAt time.Time `json:"created_at"`
-
-	// Embedded
-	Feed        Feed `json:"feed"`
-	UnreadCount int  `json:"unread_count"`
+	FolderID    *int64    `json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
+	Feed        Feed      `json:"feed"`
+	Folder      *Folder   `json:"folder"`
+	UnreadCount int       `json:"unread_count"`
 }
 
+// SubscriptionModel gives access to the subscriptions table.
 type SubscriptionModel struct {
 	DB *sql.DB
 }
 
+// Exists reports whether the user is already subscribed to the feed. The
+// subscribe path checks it up front so an existing subscription is reported as
+// such instead of breaching the unique constraint.
 func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error) {
 	query := `
 		SELECT EXISTS (
@@ -33,7 +43,7 @@ func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID 
 			WHERE user_id = $1 AND feed_id = $2
 		)`
 	var exists bool
-	err := m.DB.QueryRow(query, userID, feedID).Scan(&exists)
+	err := m.DB.QueryRowContext(ctx, query, userID, feedID).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
@@ -41,6 +51,9 @@ func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID 
 	return exists, nil
 }
 
+// GetAllForUser returns the user's subscriptions with their feed, their folder
+// (nil when unfiled) and their unread count, in one query — the sidebar needs
+// all three, and fetching the counts separately would be a query per feed.
 func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) ([]*Subscription, error) {
 	query := `
 		SELECT 
@@ -51,24 +64,29 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 			s.custom_title,
 			s.custom_icon,
 			s.created_at,
-			
+
 			-- Feed
 			f.id,
 			f.url,
 			f.original_title,
-			f.site_url,
-			f.image_url,
-			f.last_fetched_at,
+			COALESCE(f.site_url, ''),
+			COALESCE(f.image_url, ''),
+			COALESCE(f.last_fetched_at, f.created_at),
 			f.is_active,
-			
+
+			-- Folder (NULL when the subscription is unfiled)
+			fo.id,
+			fo.name,
+
 			-- Unread count
 			COUNT(l.id) FILTER (WHERE l.is_read = FALSE) AS unread_count
-			
+
 		FROM subscriptions s
 		INNER JOIN feeds f ON s.feed_id = f.id
+		LEFT JOIN folders fo ON s.folder_id = fo.id
 		LEFT JOIN links l ON l.feed_id = f.id AND l.user_id = s.user_id
 		WHERE s.user_id = $1
-		GROUP BY s.id, f.id
+		GROUP BY s.id, f.id, fo.id
 		ORDER BY s.created_at DESC`
 
 	rows, err := m.DB.QueryContext(ctx, query, userID)
@@ -82,6 +100,8 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 	for rows.Next() {
 		var s Subscription
 		var f Feed
+		var folderID sql.NullInt64
+		var folderName sql.NullString
 
 		err := rows.Scan(
 			// Subscription
@@ -101,6 +121,10 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 			&f.LastFetchedAt,
 			&f.IsActive,
 
+			// Folder
+			&folderID,
+			&folderName,
+
 			// Unread count
 			&s.UnreadCount,
 		)
@@ -109,6 +133,10 @@ func (m SubscriptionModel) GetAllForUser(ctx context.Context, userID uuid.UUID) 
 		}
 
 		s.Feed = f
+		if folderID.Valid {
+			s.FolderID = &folderID.Int64
+			s.Folder = &Folder{ID: folderID.Int64, UserID: s.UserID, Name: folderName.String}
+		}
 		subscriptions = append(subscriptions, &s)
 	}
 
@@ -152,22 +180,32 @@ func (m SubscriptionModel) Delete(ctx context.Context, userID uuid.UUID, id int6
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
+	return checkOneRow(result)
+}
+
+// SetFolder files a subscription into a folder, or unfiles it when folderID is
+// nil. The folder's ownership is checked by the caller: folding it into this
+// UPDATE as a subquery would write NULL when the folder is someone else's,
+// unfiling the subscription instead of refusing.
+func (m SubscriptionModel) SetFolder(ctx context.Context, userID uuid.UUID, id int64, folderID *int64) error {
+	query := `UPDATE subscriptions SET folder_id = $1 WHERE id = $2 AND user_id = $3`
+
+	result, err := m.DB.ExecContext(ctx, query, folderID, id, userID)
 	if err != nil {
 		return err
 	}
-	if rowsAffected == 0 {
-		return ErrRecordNotFound
-	}
 
-	return nil
+	return checkOneRow(result)
 }
 
+// Insert creates the subscription and sets its generated ID and CreatedAt.
+// Callers reach it through service.SubscriptionService, which owns the wider
+// sequence — resolving the feed, and removing it again if this write fails.
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
 	query := `
-		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id`
+		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, folder_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at`
 
 	err := m.DB.QueryRowContext(ctx,
 		query,
@@ -175,8 +213,9 @@ func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscriptio
 		subscription.FeedID,
 		subscription.CustomTitle,
 		subscription.CustomIcon,
+		subscription.FolderID,
 		time.Now(),
-	).Scan(&subscription.ID)
+	).Scan(&subscription.ID, &subscription.CreatedAt)
 
 	if err != nil {
 		return err

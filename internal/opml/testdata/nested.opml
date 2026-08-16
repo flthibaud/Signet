@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>Nested subscriptions</title>
+  </head>
+  <body>
+    <outline text="Tech">
+      <outline text="Langages">
+        <outline text="Go">
+          <outline type="rss" text="The Go Blog" xmlUrl="https://go.dev/blog/feed.atom"/>
+        </outline>
+        <outline type="rss" text="Eli Bendersky" xmlUrl="https://eli.thegreenplace.net/feeds/all.atom.xml"/>
+      </outline>
+      <outline type="rss" text="Ars Technica" xmlUrl="https://feeds.arstechnica.com/arstechnica/index"/>
+    </outline>
+    <outline text="A">
+      <outline text="B">
+        <outline text="C">
+          <outline text="D">
+            <outline text="E">
+              <outline type="rss" text="Too deep" xmlUrl="https://example.com/deep.xml"/>
+            </outline>
+          </outline>
+        </outline>
+      </outline>
+    </outline>
+  </body>
+</opml>

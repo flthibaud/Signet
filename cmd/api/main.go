@@ -1,12 +1,23 @@
+// Command api is Signet's single binary: it serves the JSON API under /v1 and
+// the embedded React Router SPA on everything else, from one process and one
+// port.
+//
+// Startup order matters. Pending migrations are applied first, on a throwaway
+// connection (migrate.go), so the pool the rest of the wiring opens is against
+// the schema that wiring assumes. Configuration is read from the environment
+// through internal/env, which reports every bad value at once rather than one
+// per restart. Passing --migrate-only migrates and exits, for a PaaS release
+// command or a job run ahead of a multi-replica rollout.
+//
+// routes.go is the single source of truth for what this binary exposes,
+// middleware.go for the chain every request passes through.
 package main
 
 import (
 	"context"
 	"database/sql"
 	"flag"
-	"log"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/flthibaud/signet/internal/data"
@@ -16,30 +27,16 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const version = "1.0.0"
-
-type config struct {
-	port int
-	env  string
-	db   struct {
-		dsn          string
-		maxOpenConns int
-		maxIdleConns int
-		maxIdleTime  time.Duration
-		autoMigrate  bool
-	}
-	limiter struct {
-		rps     float64
-		burst   int
-		enabled bool
-	}
-	scheduler struct {
-		interval  time.Duration
-		workers   int
-		batchSize int
-	}
-	fetch service.FetchConfig
-}
+// version is stamped at link time from the release tag:
+//
+//	go build -ldflags="-X main.version=0.1.0" ./cmd/api
+//
+// It has to be a var for that to work — the linker cannot write into a const.
+// Anything not built from a tag keeps "dev", which is the honest answer for a
+// local `go run` and for an image built off a branch. /v1/healthcheck reports
+// it, and that is the first thing a bug report gets asked for, so a hardcoded
+// number that nobody remembers to bump is worse than no number at all.
+var version = "dev"
 
 type application struct {
 	config    config
@@ -51,9 +48,6 @@ type application struct {
 }
 
 func main() {
-	var cfg config
-	var err error
-
 	var migrateOnly bool
 	flag.BoolVar(&migrateOnly, "migrate-only", false, "apply pending database migrations, then exit")
 	flag.Parse()
@@ -61,121 +55,14 @@ func main() {
 	// Load .env file if present
 	_ = godotenv.Load()
 
-	cfg.env = os.Getenv("ENV")
-
-	cfg.port = 8000
-	if v := os.Getenv("PORT"); v != "" {
-		cfg.port, err = strconv.Atoi(v)
-		if err != nil {
-			log.Fatalf("invalid PORT: %v", err)
-		}
-	}
-
-	cfg.limiter.rps = 5
-	if v := os.Getenv("RATE_LIMITER_RPS"); v != "" {
-		cfg.limiter.rps, err = strconv.ParseFloat(v, 64)
-		if err != nil {
-			log.Fatalf("invalid RATE_LIMITER_RPS: %v", err)
-		}
-		if cfg.limiter.rps <= 0 {
-			log.Fatalf("invalid RATE_LIMITER_RPS: must be greater than 0, got %v", cfg.limiter.rps)
-		}
-	}
-
-	cfg.limiter.burst = 10
-	if v := os.Getenv("RATE_LIMITER_BURST"); v != "" {
-		cfg.limiter.burst, err = strconv.Atoi(v)
-		if err != nil {
-			log.Fatalf("invalid RATE_LIMITER_BURST: %v", err)
-		}
-		if cfg.limiter.burst <= 0 {
-			log.Fatalf("invalid RATE_LIMITER_BURST: must be greater than 0, got %d", cfg.limiter.burst)
-		}
-	}
-
-	// Off unless asked for: whether to rate limit is a deployment decision. It
-	// only ever applies to the JSON API (see rateLimitPrefix), never to the
-	// embedded SPA's static assets.
-	if v := os.Getenv("RATE_LIMITER_ENABLED"); v != "" {
-		cfg.limiter.enabled, err = strconv.ParseBool(v)
-		if err != nil {
-			log.Fatalf("invalid RATE_LIMITER_ENABLED: %v", err)
-		}
-	}
-
-	schedulerInterval := os.Getenv("SCHEDULER_INTERVAL")
-	if schedulerInterval == "" {
-		schedulerInterval = "15m"
-	}
-	cfg.scheduler.interval, err = time.ParseDuration(schedulerInterval)
-	if err != nil {
-		log.Fatalf("invalid SCHEDULER_INTERVAL: %v", err)
-	}
-	cfg.scheduler.workers, _ = strconv.Atoi(os.Getenv("SCHEDULER_WORKERS"))
-	if cfg.scheduler.workers == 0 {
-		cfg.scheduler.workers = 5
-	}
-	cfg.scheduler.batchSize, _ = strconv.Atoi(os.Getenv("SCHEDULER_BATCH_SIZE"))
-	if cfg.scheduler.batchSize == 0 {
-		cfg.scheduler.batchSize = 50
-	}
-
-	cfg.fetch.TLSImpersonate = true
-	if v := os.Getenv("TLS_IMPERSONATE_ENABLED"); v != "" {
-		cfg.fetch.TLSImpersonate, err = strconv.ParseBool(v)
-		if err != nil {
-			log.Fatalf("invalid TLS_IMPERSONATE_ENABLED: %v", err)
-		}
-	}
-	cfg.fetch.SolverURL = os.Getenv("SOLVER_URL")
-	if v := os.Getenv("SOLVER_TIMEOUT"); v != "" {
-		cfg.fetch.SolverTimeout, err = time.ParseDuration(v)
-		if err != nil {
-			log.Fatalf("invalid SOLVER_TIMEOUT: %v", err)
-		}
-	}
-	cfg.fetch.SolverMaxPerFeed, _ = strconv.Atoi(os.Getenv("SOLVER_MAX_PER_FEED"))
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is not set")
-	}
-
-	cfg.db.dsn = databaseURL
-
-	cfg.db.maxOpenConns = 25
-	if v := os.Getenv("DATABASE_MAX_OPEN_CONNS"); v != "" {
-		cfg.db.maxOpenConns, err = strconv.Atoi(v)
-		if err != nil {
-			log.Fatalf("invalid DATABASE_MAX_OPEN_CONNS: %v", err)
-		}
-	}
-
-	cfg.db.maxIdleConns = 25
-	if v := os.Getenv("DATABASE_MAX_IDLE_CONNS"); v != "" {
-		cfg.db.maxIdleConns, err = strconv.Atoi(v)
-		if err != nil {
-			log.Fatalf("invalid DATABASE_MAX_IDLE_CONNS: %v", err)
-		}
-	}
-
-	cfg.db.maxIdleTime = 15 * time.Minute
-	if v := os.Getenv("DATABASE_MAX_IDLE_TIME"); v != "" {
-		cfg.db.maxIdleTime, err = time.ParseDuration(v)
-		if err != nil {
-			log.Fatalf("invalid DATABASE_MAX_IDLE_TIME: %v", err)
-		}
-	}
-
-	cfg.db.autoMigrate = true
-	if v := os.Getenv("AUTO_MIGRATE"); v != "" {
-		cfg.db.autoMigrate, err = strconv.ParseBool(v)
-		if err != nil {
-			log.Fatalf("invalid AUTO_MIGRATE: %v", err)
-		}
-	}
-
+	// Built before the config is read, so a configuration error is reported
+	// through the same structured logger as everything else.
 	logger := jsonlog.New(os.Stdout, jsonlog.LevelInfo)
+
+	cfg, err := loadConfig()
+	if err != nil {
+		logger.PrintFatal(err, nil)
+	}
 
 	if migrateOnly || cfg.db.autoMigrate {
 		err = migrateUp(cfg.db.dsn, logger)
@@ -206,6 +93,8 @@ func main() {
 
 	// 4. Init du scheduler
 	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)
+
+	services.OPMLService.SetSyncTrigger(scheduler)
 
 	app := &application{
 		config:    cfg,

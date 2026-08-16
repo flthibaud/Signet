@@ -9,6 +9,19 @@ import (
 )
 
 func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Request) {
+	// The gate comes before anything else for the same reason the password is
+	// validated before it is hashed, below: a rejected caller must not cost a
+	// bcrypt round.
+	open, err := app.registrationOpen()
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+		return
+	}
+	if !open {
+		app.registrationClosedResponse(w, r)
+		return
+	}
+
 	// Create an anonymous struct to hold the expected data from the request body.
 	var input struct {
 		Username string `json:"username"`
@@ -17,27 +30,33 @@ func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Parse the request body into the anonymous struct.
-	err := app.readJSON(w, r, &input)
+	err = app.readJSON(w, r, &input)
 	if err != nil {
 		app.badRequestResponse(w, r, err)
 		return
 	}
-	// Copy the data from the request body into a new User struct. Notice also that we
-	// set the Activated field to false, which isn't strictly necessary because the
-	// Activated field will have the zero-value of false by default. But setting this
-	// explicitly helps to make our intentions clear to anyone reading the code.
 	user := &data.User{
 		Username: input.Username,
 		Email:    input.Email,
 	}
-	// Use the Password.Set() method to generate and store the hashed and plaintext
-	// passwords.
+
+	// The password is checked before it is hashed, not after. bcrypt refuses
+	// anything over 72 bytes outright, so hashing first turned what should be a
+	// field error into a 500; and its ~250ms of CPU is not something an
+	// unauthenticated caller should be able to spend on input already known to
+	// be unusable.
+	v := validator.New()
+	if data.ValidatePasswordPlaintext(v, input.Password); !v.Valid() {
+		app.failedValidationResponse(w, r, v.Errors)
+		return
+	}
+
 	err = user.Password.Set(input.Password)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 		return
 	}
-	v := validator.New()
+
 	// Validate the user struct and return the error messages to the client if any of
 	// the checks fail.
 	if data.ValidateUser(v, user); !v.Valid() {
@@ -70,13 +89,26 @@ func (app *application) registerUserHandler(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func (app *application) getCurrentUserHandler(w http.ResponseWriter, r *http.Request) {
-	user := app.contextGetUser(r)
-
-	if user.IsAnonymous() {
-		app.invalidAuthenticationTokenResponse(w, r)
-		return
+// registrationOpen reports whether a new account may be created. A closed
+// instance still lets the very first one through: there is no CLI to create a
+// user with, so an install started with the default — closed — would otherwise
+// be locked out of itself.
+func (app *application) registrationOpen() (bool, error) {
+	if app.config.registrationEnabled {
+		return true, nil
 	}
+
+	hasUsers, err := app.models.Users.HasAny()
+	if err != nil {
+		return false, err
+	}
+
+	return !hasUsers, nil
+}
+
+func (app *application) getCurrentUserHandler(w http.ResponseWriter, r *http.Request) {
+	// requireAuthenticatedUser has already rejected anonymous callers.
+	user := app.contextGetUser(r)
 
 	err := app.writeJSON(w, http.StatusOK, envelope{"user": user}, nil)
 	if err != nil {

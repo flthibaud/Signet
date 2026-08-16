@@ -49,16 +49,21 @@ services:
       PORT: ${PORT:-8000}
       ENV: ${ENV:-production}
       DATABASE_URL: ${DATABASE_URL:-postgres://signet:signet@db:5432/signet?sslmode=disable}
-      # The app applies its own migrations at startup, which is why this stack
-      # has no separate migration service. Set to false only if you would rather
-      # advance the schema yourself, with `docker compose run --rm app --migrate-only`
-      # or the `make migrate-*` targets.
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+      SCHEDULER_INTERVAL: ${SCHEDULER_INTERVAL:-15m}
+      SCHEDULER_WORKERS: ${SCHEDULER_WORKERS:-5}
+      SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-50}
+      # Idle timeout: the expiry slides forward while a session is in use.
+      SESSION_TTL: ${SESSION_TTL:-720h}
+      # Closed by default; the first account is created before the door shuts.
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
       RATE_LIMITER_RPS: ${RATE_LIMITER_RPS:-5}
       RATE_LIMITER_BURST: ${RATE_LIMITER_BURST:-10}
       RATE_LIMITER_ENABLED: ${RATE_LIMITER_ENABLED:-false}
-      # Article scraping impersonates a browser TLS fingerprint by default; see
-      # docs/ANTIBOT_FETCHING.md. RSS polling is never affected.
+      # Only sent over HTTPS; 0 disables it.
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
+      # Set to true only to subscribe to feeds on your own network.
+      FETCH_ALLOW_PRIVATE_NETWORKS: ${FETCH_ALLOW_PRIVATE_NETWORKS:-false}
       TLS_IMPERSONATE_ENABLED: ${TLS_IMPERSONATE_ENABLED:-true}
       # Empty unless you enable the solver profile below.
       SOLVER_URL: ${SOLVER_URL:-}

@@ -1,3 +1,11 @@
+// Package jsonlog writes one JSON object per log entry, so a deployment's logs
+// can be shipped to any collector without a parsing rule written for this app in
+// particular.
+//
+// It is deliberately small: the app logs from a handful of places (the request
+// error path, the scheduler, startup and shutdown), and every entry is a
+// message plus a flat map of string properties. There is no level filtering
+// beyond a minimum severity, no context plumbing, and no sub-loggers.
 package jsonlog
 
 import (
@@ -9,19 +17,21 @@ import (
 	"time"
 )
 
-// Define a Level type to represent the severity level for a log entry.
+// Level is the severity of a log entry. Entries below a Logger's minimum level
+// are dropped.
 type Level int8
 
-// Initialize constants which represent a specific severity level. We use the iota
-// keyword as a shortcut to assign successive integer values to the constants.
+// The severity levels, in increasing order. LevelOff is above every real level,
+// so a logger created with it writes nothing.
 const (
-	LevelInfo  Level = iota // Has the value 0.
-	LevelError              // Has the value 1.
-	LevelFatal              // Has the value 2.
-	LevelOff                // Has the value 3.
+	LevelInfo Level = iota
+	LevelError
+	LevelFatal
+	LevelOff
 )
 
-// Return a human-friendly string for the severity level.
+// String returns the name written to the "level" field. LevelOff has no name:
+// it is a threshold, never the level of an actual entry.
 func (l Level) String() string {
 	switch l {
 	case LevelInfo:
@@ -35,17 +45,16 @@ func (l Level) String() string {
 	}
 }
 
-// Define a custom Logger type. This holds the output destination that the log entries
-// will be written to, the minimum severity level that log entries will be written for,
-// plus a mutex for coordinating the writes.
+// Logger writes JSON entries to a destination, serialized by its own mutex so
+// that concurrent callers cannot interleave halves of two entries on one line.
+// The zero value is not usable; call New.
 type Logger struct {
 	out      io.Writer
 	minLevel Level
 	mu       sync.Mutex
 }
 
-// Return a new Logger instance which writes log entries at or above a minimum severity
-// level to a specific output destination.
+// New returns a Logger writing entries of at least minLevel to out.
 func New(out io.Writer, minLevel Level) *Logger {
 	return &Logger{
 		out:      out,
@@ -53,31 +62,34 @@ func New(out io.Writer, minLevel Level) *Logger {
 	}
 }
 
-// Declare some helper methods for writing log entries at the different levels. Notice
-// that these all accept a map as the second parameter which can contain any arbitrary
-// 'properties' that you want to appear in the log entry.
+// PrintInfo records a normal event. properties may be nil; when set, its pairs
+// are written under "properties" — that is where anything worth grepping for
+// later belongs (a feed ID, a request URL), rather than interpolated into the
+// message, which would make the message unaggregatable.
 func (l *Logger) PrintInfo(message string, properties map[string]string) {
 	l.print(LevelInfo, message, properties)
 }
 
+// PrintError records a failure the app recovered from. The entry carries a
+// stack trace.
 func (l *Logger) PrintError(err error, properties map[string]string) {
 	l.print(LevelError, err.Error(), properties)
 }
 
+// PrintFatal records a failure the app cannot continue past and then terminates
+// the process with status 1. It never returns, so it is only for startup wiring
+// and for the server's own exit path — never for a request handler, where it
+// would take every other in-flight request down with it.
 func (l *Logger) PrintFatal(err error, properties map[string]string) {
 	l.print(LevelFatal, err.Error(), properties)
-	os.Exit(1) // For entries at the FATAL level, we also terminate the application.
+	os.Exit(1)
 }
 
-// Print is an internal method for writing the log entry.
 func (l *Logger) print(level Level, message string, properties map[string]string) (int, error) {
-	// If the severity level of the log entry is below the minimum severity for the
-	// logger, then return with no further action.
 	if level < l.minLevel {
 		return 0, nil
 	}
 
-	// Declare an anonymous struct holding the data for the log entry.
 	aux := struct {
 		Level      string            `json:"level"`
 		Time       string            `json:"time"`
@@ -91,36 +103,26 @@ func (l *Logger) print(level Level, message string, properties map[string]string
 		Properties: properties,
 	}
 
-	// Include a stack trace for entries at the ERROR and FATAL levels.
 	if level >= LevelError {
 		aux.Trace = string(debug.Stack())
 	}
 
-	// Declare a line variable for holding the actual log entry text.
-	var line []byte
-
-	// Marshal the anonymous struct to JSON and store it in the line variable. If there
-	// was a problem creating the JSON, set the contents of the log entry to be that
-	// plain-text error message instead.
+	// A marshalling failure still has to produce a line: dropping the entry
+	// would lose the error that was being reported in the first place.
 	line, err := json.Marshal(aux)
 	if err != nil {
 		line = []byte(LevelError.String() + ": unable to marshal log message: " + err.Error())
 	}
 
-	// Lock the mutex so that no two writes to the output destination can happen
-	// concurrently. If we don't do this, it's possible that the text for two or more
-	// log entries will be intermingled in the output.
 	l.mu.Lock()
-
 	defer l.mu.Unlock()
 
-	// Write the log entry followed by a newline.
 	return l.out.Write(append(line, '\n'))
 }
 
-// We also implement a Write() method on our Logger type so that it satisfies the
-// io.Writer interface. This writes a log entry at the ERROR level with no additional
-// properties.
+// Write makes Logger an io.Writer, so it can be handed to APIs that expect one
+// — http.Server.ErrorLog in particular. Everything arriving this way is logged
+// at ERROR with no properties.
 func (l *Logger) Write(message []byte) (n int, err error) {
 	return l.print(LevelError, string(message), nil)
 }

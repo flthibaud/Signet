@@ -1,42 +1,40 @@
 # Notice
 
-Signet — un lecteur read-it-later self-hosted avec support natif RSS/Atom.
+Signet — a self-hosted read-it-later reader with native RSS/Atom support.
 
 Copyright (C) 2026 Florian Thibaud
 
-Ce programme est un logiciel libre : vous pouvez le redistribuer et/ou le modifier
-selon les termes de la GNU Affero General Public License telle que publiée par la
-Free Software Foundation, soit la version 3 de la licence, soit (à votre choix)
-toute version ultérieure.
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
 
-Ce programme est distribué dans l'espoir qu'il sera utile, mais **SANS AUCUNE
-GARANTIE** ; sans même la garantie implicite de COMMERCIALISATION ou d'ADÉQUATION
-À UN USAGE PARTICULIER. Voir la GNU Affero General Public License pour plus de
-détails. Une copie complète est disponible dans le fichier [LICENSE](LICENSE) et
-sur <https://www.gnu.org/licenses/agpl-3.0.html>.
+This program is distributed in the hope that it will be useful, but **WITHOUT ANY
+WARRANTY**; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details. A
+full copy is available in the [LICENSE](LICENSE) file and at
+<https://www.gnu.org/licenses/agpl-3.0.html>.
 
-## Marques
+## Trademarks
 
-Le nom **Signet** et son logo ne sont **pas** couverts par la licence AGPL-3.0.
-La licence vous accorde des droits sur le code source, pas sur l'identité du
-projet. Un fork redistribué publiquement, ou une instance hébergée proposée
-comme service, doit être publié sous un nom distinct afin d'éviter toute
-confusion sur son origine.
+The **Signet** name and its logo are **not** covered by the AGPL-3.0 license. The
+license grants you rights over the source code, not over the project's identity.
+A publicly redistributed fork, or a hosted instance offered as a service, must be
+published under a distinct name to avoid any confusion about its origin.
 
 ## Inspiration
 
-Signet est inspiré d'[Omnivore](https://github.com/omnivore-app/omnivore)
-(AGPL-3.0), arrêté fin 2024 après le rachat de l'équipe par ElevenLabs.
+Signet is inspired by [Omnivore](https://github.com/omnivore-app/omnivore)
+(AGPL-3.0), discontinued in late 2024 after the team was acquired by ElevenLabs.
 
-**Aucun code d'Omnivore n'a été repris.** L'architecture, le schéma de base de
-données et l'intégralité de l'implémentation sont originaux : Signet est un
-binaire Go unique servant une SPA React embarquée, là où Omnivore reposait sur un
-ensemble de services TypeScript. La parenté se limite à l'idée produit et à
-certains choix d'ergonomie.
+**No Omnivore code was reused.** The architecture, the database schema and the
+entire implementation are original: Signet is a single Go binary serving an
+embedded React SPA, where Omnivore was built on a set of TypeScript services. The
+kinship is limited to the product idea and some UX choices.
 
-## Dépendances tierces
+## Third-party dependencies
 
-Signet est lié à des bibliothèques tierces, toutes distribuées sous licence
-permissive (MIT, BSD ou Apache-2.0). Chacune reste soumise à sa propre licence ;
-la liste complète et les versions exactes se trouvent dans [go.mod](go.mod) et
+Signet links against third-party libraries, all distributed under permissive
+licenses (MIT, BSD or Apache-2.0). Each remains subject to its own license; the
+full list and exact versions are in [go.mod](go.mod) and
 [frontend/package.json](frontend/package.json).

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -21,7 +21,6 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// 1. Validation
 	v := validator.New()
 	v.Check(input.URL != "", "url", "must be provided")
 	v.Check(len(input.URL) <= 2048, "url", "must not be more than 2048 characters long")
@@ -34,73 +33,32 @@ func (app *application) createSubscriptionHandler(w http.ResponseWriter, r *http
 
 	userID := app.contextGetUser(r).ID
 
-	// 2. Vérifie si le feed existe déjà en base
-	feed, err := app.models.Feeds.GetByURL(r.Context(), input.URL)
-	if err != nil && err != data.ErrRecordNotFound {
-		app.serverErrorResponse(w, r, err)
-		return
-	}
-
-	// 3. Si feed n'existe pas, le créer
-	if feed == nil {
-		feed, err = app.services.FeedService.CreateFromURL(r.Context(), input.URL)
-		if err != nil {
-			// Renvoie les erreurs liées au feed comme erreurs de validation sur le
-			// champ "url" afin que le client puisse les afficher au bon endroit,
-			// sans exposer les détails internes du parser.
-			switch {
-			case errors.Is(err, service.ErrInvalidFeed):
-				v.AddError("url", "the URL does not point to a valid RSS feed")
-				app.failedValidationResponse(w, r, v.Errors)
-			case errors.Is(err, service.ErrFeedNotFound):
-				v.AddError("url", "the feed could not be reached")
-				app.failedValidationResponse(w, r, v.Errors)
-			default:
-				app.serverErrorResponse(w, r, err)
-			}
-			return
-		}
-	}
-
-	// 4. Vérifie si subscription existe déjà
-	exists, err := app.models.Subscriptions.Exists(r.Context(), userID, feed.ID)
+	subscription, err := app.services.SubscriptionService.Subscribe(r.Context(), userID, input.URL, service.SubscribeOptions{})
 	if err != nil {
-		app.serverErrorResponse(w, r, err)
-		return
-	}
-
-	if exists {
-		v.AddError("url", "you are already subscribed to this feed")
-		app.failedValidationResponse(w, r, v.Errors)
-		return
-	}
-
-	// 5. Crée la subscription
-	subscription := &data.Subscription{
-		UserID: userID,
-		FeedID: feed.ID,
-	}
-
-	err = app.models.Subscriptions.Insert(r.Context(), subscription)
-	if err != nil {
-		app.serverErrorResponse(w, r, err)
-		return
-	}
-
-	// 6. Import des articles EN BACKGROUND (non-bloquant)
-	go func() {
-		ctx := context.Background()
-		err := app.services.FeedService.ImportArticlesForSubscribers(ctx, feed)
-		if err != nil {
-			app.logger.PrintError(err, nil)
+		switch {
+		case errors.Is(err, service.ErrInvalidFeed):
+			v.AddError("url", "the URL does not point to a valid RSS feed")
+			app.failedValidationResponse(w, r, v.Errors)
+		case errors.Is(err, service.ErrFeedNotFound):
+			v.AddError("url", "the feed could not be reached")
+			app.failedValidationResponse(w, r, v.Errors)
+		case errors.Is(err, service.ErrAlreadySubscribed):
+			v.AddError("url", "you are already subscribed to this feed")
+			app.failedValidationResponse(w, r, v.Errors)
+		default:
+			app.serverErrorResponse(w, r, err)
 		}
-	}()
+		return
+	}
 
-	// 7. Retourne immédiatement (sans attendre l'import)
-	app.writeJSON(w, http.StatusCreated, envelope{
+	// The article import runs in the background; the response does not wait on it.
+	err = app.writeJSON(w, http.StatusCreated, envelope{
 		"subscription": subscription,
 		"message":      "Subscription created. Articles are being imported in the background.",
 	}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
 }
 
 func (app *application) deleteSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +82,70 @@ func (app *application) deleteSubscriptionHandler(w http.ResponseWriter, r *http
 	}
 
 	err = app.writeJSON(w, http.StatusOK, envelope{"message": "subscription successfully deleted"}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
+}
+
+func (app *application) updateSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := app.readIDParam(r)
+	if err != nil {
+		app.notFoundResponse(w, r)
+		return
+	}
+
+	// Decoded raw so that an absent key and an explicit null stay distinct:
+	// null unfiles the subscription, absent is a malformed request.
+	var input struct {
+		FolderID json.RawMessage `json:"folder_id"`
+	}
+
+	err = app.readJSON(w, r, &input)
+	if err != nil {
+		app.badRequestResponse(w, r, err)
+		return
+	}
+
+	v := validator.New()
+	v.Check(len(input.FolderID) > 0, "folder_id", "must be provided")
+	if !v.Valid() {
+		app.failedValidationResponse(w, r, v.Errors)
+		return
+	}
+
+	var folderID *int64
+	if err := json.Unmarshal(input.FolderID, &folderID); err != nil {
+		app.badRequestResponse(w, r, errors.New("body contains incorrect JSON type for field \"folder_id\""))
+		return
+	}
+
+	userID := app.contextGetUser(r).ID
+
+	if folderID != nil {
+		if _, err := app.models.Folders.Get(r.Context(), userID, *folderID); err != nil {
+			switch {
+			case errors.Is(err, data.ErrRecordNotFound):
+				v.AddError("folder_id", "no such folder")
+				app.failedValidationResponse(w, r, v.Errors)
+			default:
+				app.serverErrorResponse(w, r, err)
+			}
+			return
+		}
+	}
+
+	err = app.models.Subscriptions.SetFolder(r.Context(), userID, id, folderID)
+	if err != nil {
+		switch {
+		case errors.Is(err, data.ErrRecordNotFound):
+			app.notFoundResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
+		return
+	}
+
+	err = app.writeJSON(w, http.StatusOK, envelope{"message": "subscription successfully updated"}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}

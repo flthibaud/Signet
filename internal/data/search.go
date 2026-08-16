@@ -31,23 +31,28 @@ const (
 		", MaxWords=32, MinWords=12, MaxFragments=1, FragmentDelimiter= … "
 )
 
-// SearchResult is one hit in a user's library: their per-user link state plus
-// the article metadata needed to render a result row.
+// SearchResult is one hit. Snippet is the ts_headline extract, with matched
+// terms wrapped in the HighlightStart/HighlightEnd markers — plain text the
+// frontend splits on, never HTML, so a match inside an article cannot inject a
+// tag into the results list.
+//
+// Rank is only meaningful within one response: it scores a result against this
+// query, not against anything else.
 type SearchResult struct {
-	ID          int64     `json:"id"`
-	Slug        string    `json:"slug"`
-	Title       string    `json:"title"`
-	Snippet     string    `json:"snippet"`
-	ImageURL    string    `json:"image_url,omitempty"`
-	FeedID      *int64    `json:"feed_id"`
-	FeedTitle   *string   `json:"feed_title,omitempty"`
-	ReadingTime float64   `json:"reading_time_minutes"`
-	IsRead      bool      `json:"is_read"`
-	IsStarred   bool      `json:"is_starred"`
-	IsArchived  bool      `json:"is_archived"`
-	SavedAt     time.Time `json:"saved_at"`
-	PublishedAt time.Time `json:"published_at"`
-	Rank        float64   `json:"rank"`
+	ID          int64      `json:"id"`
+	Slug        string     `json:"slug"`
+	Title       string     `json:"title"`
+	Snippet     string     `json:"snippet"`
+	ImageURL    string     `json:"image_url,omitempty"`
+	FeedID      *int64     `json:"feed_id"`
+	FeedTitle   *string    `json:"feed_title,omitempty"`
+	ReadingTime float64    `json:"reading_time_minutes"`
+	IsRead      bool       `json:"is_read"`
+	IsStarred   bool       `json:"is_starred"`
+	ArchivedAt  *time.Time `json:"archived_at"`
+	SavedAt     time.Time  `json:"saved_at"`
+	PublishedAt time.Time  `json:"published_at"`
+	Rank        float64    `json:"rank"`
 }
 
 // SearchFilters describes a library search. An empty Query is valid and means
@@ -77,8 +82,11 @@ type SearchFilters struct {
 // list ('foo' & 'bar'), so appending the marker only ever affects the trailing
 // term. A query made solely of stopwords renders as the empty string, which is
 // not a valid tsquery; it collapses to NULL instead, and NULL never matches.
+// config is interpolated into the query text rather than bound, so it is run
+// through safeTextSearchConfig here — at the point of interpolation — instead of
+// being trusted from the caller.
 func tsqueryExpr(n int, config string) string {
-	parsed := fmt.Sprintf("websearch_to_tsquery('%s', $%d)", config, n)
+	parsed := fmt.Sprintf("websearch_to_tsquery('%s', $%d)", safeTextSearchConfig(config), n)
 	return fmt.Sprintf(
 		"(CASE WHEN %s::text = '' THEN NULL::tsquery ELSE (%s::text || ':*')::tsquery END)",
 		parsed, parsed,
@@ -98,7 +106,11 @@ func tsqueryExpr(n int, config string) string {
 // "le" in French would wipe out the neutral half that would have matched.
 func searchQueryExpr(n int, language string) string {
 	neutral := tsqueryExpr(n, SimpleTextSearchConfig)
-	if language == "" || language == SimpleTextSearchConfig {
+
+	// Resolved up front so an unrecognized value collapses to the neutral half
+	// here, rather than producing a redundant `neutral || neutral`.
+	language = safeTextSearchConfig(language)
+	if language == SimpleTextSearchConfig {
 		return neutral
 	}
 
@@ -130,7 +142,7 @@ func (m LinkModel) Search(ctx context.Context, userID uuid.UUID, filters SearchF
 		// comes straight off idx_links_user_published and PostgreSQL can stop as
 		// soon as it has a page.
 		query = fmt.Sprintf(`
-			SELECT l.id, l.slug, l.feed_id, l.is_read, l.is_starred, l.archived_at IS NOT NULL,
+			SELECT l.id, l.slug, l.feed_id, l.is_read, l.is_starred, l.archived_at,
 				l.saved_at,
 				a.title,
 				COALESCE(NULLIF(a.image_url, ''), f.image_url, '') AS image_url,
@@ -180,7 +192,7 @@ func (m LinkModel) Search(ctx context.Context, userID uuid.UUID, filters SearchF
 				ORDER BY l.published_at DESC, l.id DESC
 				LIMIT %d
 			)
-			SELECT c.id, c.slug, c.feed_id, c.is_read, c.is_starred, c.archived_at IS NOT NULL,
+			SELECT c.id, c.slug, c.feed_id, c.is_read, c.is_starred, c.archived_at,
 				c.saved_at,
 				a.title,
 				COALESCE(NULLIF(a.image_url, ''), f.image_url, '') AS image_url,
@@ -218,7 +230,7 @@ func (m LinkModel) Search(ctx context.Context, userID uuid.UUID, filters SearchF
 			&r.FeedID,
 			&r.IsRead,
 			&r.IsStarred,
-			&r.IsArchived,
+			&r.ArchivedAt,
 			&r.SavedAt,
 			&r.Title,
 			&r.ImageURL,
