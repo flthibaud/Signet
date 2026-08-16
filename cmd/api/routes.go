@@ -19,6 +19,9 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.HandlerFunc(http.MethodGet, "/v1/readiness", app.readinessHandler)
 
+	// The settings the SPA has to know before it can render its guest pages.
+	router.HandlerFunc(http.MethodGet, "/v1/config", app.clientConfigHandler)
+
 	// Auth
 	router.HandlerFunc(http.MethodPost, "/v1/users", app.registerUserHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/tokens/authentication", app.createAuthenticationTokenHandler)

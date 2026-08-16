@@ -56,3 +56,22 @@ func TestUserInsertDuplicates(t *testing.T) {
 		})
 	})
 }
+
+// TestUserHasAny checks the query behind the bootstrap exception to
+// REGISTRATION_ENABLED against a real table. The empty case is not exercised
+// here — the fixtures never truncate — but that half is plain SQL semantics;
+// what can actually break is the table name or the Scan, which this covers.
+func TestUserHasAny(t *testing.T) {
+	db := testDB(t)
+	model := UserModel{DB: db}
+
+	seedUser(t, db)
+
+	hasUsers, err := model.HasAny()
+	if err != nil {
+		t.Fatalf("HasAny: %v", err)
+	}
+	if !hasUsers {
+		t.Error("got false with a seeded user, want true")
+	}
+}

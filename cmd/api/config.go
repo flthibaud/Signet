@@ -27,10 +27,11 @@ type config struct {
 		workers   int
 		batchSize int
 	}
-	hstsMaxAge        int
-	sessionTTL        time.Duration
-	trustedProxyCount int
-	fetch             service.FetchConfig
+	hstsMaxAge          int
+	sessionTTL          time.Duration
+	trustedProxyCount   int
+	registrationEnabled bool
+	fetch               service.FetchConfig
 }
 
 // loadConfig reads the application's configuration from the environment.
@@ -84,6 +85,13 @@ func loadConfig() (config, error) {
 	// shared machine wants it shorter.
 	cfg.sessionTTL = l.Duration("SESSION_TTL", 30*24*time.Hour)
 	l.Check(cfg.sessionTTL > 0, "SESSION_TTL", "must be positive")
+
+	// Closed by default: a self-hosted instance exposed to the internet has no
+	// business accepting accounts its owner did not ask for. The first account
+	// stays creatable while the database holds none (see registerUserHandler),
+	// otherwise a fresh install would lock everyone out — there is no CLI to
+	// create a user with.
+	cfg.registrationEnabled = l.Bool("REGISTRATION_ENABLED", false)
 
 	cfg.fetch.TLSImpersonate = l.Bool("TLS_IMPERSONATE_ENABLED", true)
 	cfg.fetch.SolverURL = l.String("SOLVER_URL", "")

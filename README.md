@@ -101,6 +101,7 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `SCHEDULER_WORKERS` | `5` | Concurrent sync workers |
 | `SCHEDULER_BATCH_SIZE` | `50` | Feeds processed per tick |
 | `SESSION_TTL` | `720h` | Session **idle** timeout; the expiry slides forward while the session is used |
+| `REGISTRATION_ENABLED` | `false` | Whether anyone can sign up. Closed, `POST /v1/users` returns 403 and the sign-up tab is hidden; the first account stays creatable while the instance has none |
 | `HSTS_MAX_AGE` | `31536000` | HSTS lifetime in seconds; `0` disables the header. Only ever sent over HTTPS |
 | `FETCH_ALLOW_PRIVATE_NETWORKS` | `false` | Let feed/article fetches reach private addresses. Cloud metadata stays blocked either way |
 | `TLS_IMPERSONATE_ENABLED` | `true` | Browser TLS fingerprint for article scraping |
@@ -109,6 +110,8 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `SOLVER_MAX_PER_FEED` | `5` | Cap on solves per feed run |
 
 The rate limiter is **disabled by default**: a self-hoster serving a handful of trusted users does not need it. It only applies to `/v1/*`.
+
+Registration is **closed by default**, so an instance you put on the internet does not hand out accounts to whoever finds it. Sign-ups stay open while the database holds no user, which is what lets you create your own account on a fresh install — after that the door shuts on its own. Set `REGISTRATION_ENABLED=true` to open it to other people.
 
 ### Behind a reverse proxy
 

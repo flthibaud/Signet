@@ -55,6 +55,8 @@ services:
       SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-50}
       # Idle timeout: the expiry slides forward while a session is in use.
       SESSION_TTL: ${SESSION_TTL:-720h}
+      # Closed by default; the first account is created before the door shuts.
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
       RATE_LIMITER_RPS: ${RATE_LIMITER_RPS:-5}
       RATE_LIMITER_BURST: ${RATE_LIMITER_BURST:-10}
       RATE_LIMITER_ENABLED: ${RATE_LIMITER_ENABLED:-false}

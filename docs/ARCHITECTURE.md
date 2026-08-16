@@ -129,7 +129,8 @@ L'application suit une architecture en 3 couches :
 |---------|-------|------|-------------|
 | `GET` | `/v1/healthcheck` | Non | Liveness : le process sert des requêtes, sans vérifier ses dépendances |
 | `GET` | `/v1/readiness` | Non | Readiness : `PingContext` sur la base (timeout 2s), `503` si injoignable |
-| `POST` | `/v1/users` | Non | Inscription d'un utilisateur |
+| `GET` | `/v1/config` | Non | Réglages de l'instance dont le SPA a besoin avant connexion (`registration_enabled`) |
+| `POST` | `/v1/users` | Non | Inscription d'un utilisateur ; `403` si les inscriptions sont fermées |
 | `POST` | `/v1/tokens/authentication` | Non | Connexion (obtenir un token) |
 | `GET` | `/v1/subscriptions` | Oui | Liste des abonnements RSS, avec leur dossier |
 | `POST` | `/v1/subscriptions` | Oui | S'abonner à un flux RSS |
@@ -319,6 +320,16 @@ La deuxième ligne ne se rouvre jamais : un auto-hébergeur qui autorise son LAN
 - **Hachage mot de passe** : bcrypt (cost factor par défaut)
 - **Token** : 16 octets d'entropie encodés en base32 (26 caractères), stocké en SHA256 dans la BDD. La longueur attendue par `ValidateTokenPlaintext` est dérivée de l'encodage, pas écrite en dur.
 - **Header** : `Authorization: Bearer <token>` ou cookie httpOnly `auth_token`
+
+### Ouverture des inscriptions
+
+`POST /v1/users` est publique — elle doit l'être, personne n'a de token avant d'avoir un compte — donc n'importe qui trouvant l'URL d'une instance pourrait s'y inscrire. `REGISTRATION_ENABLED` ferme la porte, et elle est **fermée par défaut** : une instance auto-hébergée n'a pas à accepter des comptes que son propriétaire n'a pas voulus.
+
+Reste le problème d'amorçage : il n'existe aucune CLI de création d'utilisateur, donc une install neuve avec le réglage par défaut serait inaccessible à son propre installateur. D'où l'exception — tant que la table `users` est vide, l'inscription passe quand même (`Users.HasAny`). Le parcours par défaut est donc : on installe, on crée son compte, l'instance se ferme d'elle-même juste après. Deux inscriptions simultanées sur une base vide peuvent toutes deux aboutir ; ce sont deux comptes créés par la même personne sur sa propre instance, la course est assumée.
+
+Le contrôle est la toute première chose que fait `registerUserHandler`, avant même de lire le corps de la requête, pour la même raison que le mot de passe est validé avant d'être haché : un appelant refusé ne doit pas coûter un tour de bcrypt.
+
+Le SPA lit `GET /v1/config` pour savoir s'il propose l'onglet « Create account ». Cet endpoint ignore l'exception d'amorçage et renvoie `false` sur une base vide, alors que l'API accepterait un compte : l'exception est un filet de sécurité pour qui installe, pas une invitation affichée aux visiteurs. Le `403` reste de toute façon le vrai garde-fou — masquer un onglet n'empêche pas un `curl`.
 
 ### Durée de vie des sessions
 
@@ -780,6 +791,7 @@ LIMIT 20;
 | `RATE_LIMITER_BURST` | Capacité burst | `4` |
 | `RATE_LIMITER_ENABLED` | Activer le rate limiting | `true` |
 | `HSTS_MAX_AGE` | Durée HSTS en secondes, `0` pour désactiver | `31536000` |
+| `REGISTRATION_ENABLED` | Ouverture des inscriptions (fermé par défaut) | `true` |
 | `FETCH_ALLOW_PRIVATE_NETWORKS` | Autorise les fetches vers le réseau privé | `false` |
 
 ### Structure application

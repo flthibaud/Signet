@@ -85,6 +85,13 @@ func (app *application) invalidCredentialsResponse(w http.ResponseWriter, r *htt
 	app.errorResponse(w, r, http.StatusUnauthorized, message)
 }
 
+// registrationClosedResponse reports that this instance does not accept new
+// accounts. A 403 rather than a 404: the endpoint exists, it is closed.
+func (app *application) registrationClosedResponse(w http.ResponseWriter, r *http.Request) {
+	message := "registrations are closed on this instance"
+	app.errorResponse(w, r, http.StatusForbidden, message)
+}
+
 // invalidAuthenticationTokenResponse reports a missing, malformed or expired
 // token on a route that requires one.
 func (app *application) invalidAuthenticationTokenResponse(w http.ResponseWriter, r *http.Request) {
