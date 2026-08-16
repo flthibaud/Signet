@@ -44,7 +44,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The application image is pulled from GHCR (`ghcr.io/flthibaud/signet`), published by CI: `latest` tracks `master`, `dev` tracks `develop`. Nothing is compiled locally, so this file works as-is on a NAS or a VPS with no toolchain. For a lasting deployment, pin a version tag in `SIGNET_TAG` rather than following `latest`: pulling a newer image applies its migrations on the next restart, and a migration does not replay backwards.
+The application image is pulled from GHCR (`ghcr.io/flthibaud/signet`), published by CI: released versions are tagged `0.2.0` and `0.2`, `latest` tracks the newest stable release, and `dev` tracks the `develop` branch. Nothing is compiled locally, so this file works as-is on a NAS or a VPS with no toolchain. For a lasting deployment, pin a version in `SIGNET_TAG` (`SIGNET_TAG=0.2.0`) rather than following `latest`: pulling a newer image applies its migrations on the next restart, and a migration does not replay backwards. `GET /v1/healthcheck` reports the version an instance is actually running; the [releases page](https://github.com/flthibaud/Signet/releases) says what changed between two of them.
 
 The app listens on <http://localhost:8000>. The binary embeds its SQL migrations and brings the database up to date itself at startup: there is no migration step to run beforehand, and no dedicated service in the compose file. An empty database is enough.
 

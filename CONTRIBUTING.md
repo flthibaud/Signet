@@ -79,6 +79,33 @@ Branch off `develop`, keep the change focused, and make sure `go vet ./...`, `go
 
 Opening an issue first is welcome for anything large; it is cheaper to disagree about an approach than about a finished branch.
 
+## Releases and versioning
+
+`develop` is the integration branch and `master` the release branch, so cutting a release is a `develop` → `master` merge followed by a tag:
+
+```bash
+git checkout master && git merge --no-ff develop
+git tag -a v0.2.0 -m "Signet 0.2.0"
+git push origin master --follow-tags
+```
+
+That is the whole procedure. The tag push builds the image, publishes `ghcr.io/flthibaud/signet:0.2.0`, `:0.2` and `:latest`, stamps the version into the binary (`/v1/healthcheck` reports it), and opens the GitHub Release with notes generated from the pull requests merged since the previous tag.
+
+Because those notes are built from **pull request titles and labels**, both are public documentation: `feat: gate registration behind REGISTRATION_ENABLED` reads on its own, `Feat/registration-toggle` does not. Labels sort the notes into the sections declared in [`.github/release.yml`](.github/release.yml); `breaking-change` is the one that matters most.
+
+Versions follow [SemVer](https://semver.org/), read from the point of view of whoever *operates* an instance rather than of an API client — Signet ships as an image someone else runs:
+
+| Change | Bump |
+| --- | --- |
+| An environment variable renamed, removed, or given a different default | major |
+| A migration that drops data, or whose `down` does not restore the previous state | major |
+| A raised PostgreSQL floor, or a compose file that no longer works unchanged | major |
+| A breaking change to a `/v1/` response or request shape | major |
+| A new feature, a new route, a new optional environment variable | minor |
+| A fix, a performance change, documentation | patch |
+
+The project is on `0.x`: breaking changes are allowed between minor versions, as long as the release notes say so. A release candidate is tagged `v0.3.0-rc.1` — the pre-release suffix keeps it off both the `latest` image tag and the repository's "Latest release", so it only reaches people who ask for it by name.
+
 ## License
 
 Contributions are made under the project's [AGPL-3.0-or-later](LICENSE) license.

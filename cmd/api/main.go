@@ -27,7 +27,16 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const version = "1.0.0"
+// version is stamped at link time from the release tag:
+//
+//	go build -ldflags="-X main.version=0.1.0" ./cmd/api
+//
+// It has to be a var for that to work — the linker cannot write into a const.
+// Anything not built from a tag keeps "dev", which is the honest answer for a
+// local `go run` and for an image built off a branch. /v1/healthcheck reports
+// it, and that is the first thing a bug report gets asked for, so a hardcoded
+// number that nobody remembers to bump is worse than no number at all.
+var version = "dev"
 
 type application struct {
 	config    config
