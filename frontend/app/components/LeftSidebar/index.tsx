@@ -6,6 +6,7 @@ import ToggleTheme from "./ToggleTheme";
 import Logo from "~/components/Logo";
 import Search from "~/components/Search";
 import FolderList from "./FolderList";
+import Settings from "~/components/Settings";
 
 import {
   PanelLeftClose,
@@ -14,6 +15,12 @@ import {
   Search as SearchIcon,
   Library,
   Rss,
+  Settings as SettingsIcon,
+  UserRound,
+  Lock,
+  MonitorSmartphone,
+  Palette,
+  Trash2,
 } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 
@@ -22,8 +29,20 @@ type LeftSidebarProps = {
   setIsCollapsed?: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
+// The tabs of the settings modal. Declared outside the component so the array
+// identity is stable: Settings seeds its active tab from it on mount, and a new
+// array on every sidebar render would be a new `items[0]` each time.
+const settings = [
+  { id: "edit-profile", title: "Edit profile", icon: UserRound },
+  { id: "password", title: "Password", icon: Lock },
+  { id: "sessions", title: "Sessions", icon: MonitorSmartphone },
+  { id: "appearance", title: "Appearance", icon: Palette },
+  { id: "delete-account", title: "Delete account", icon: Trash2 },
+];
+
 const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
   const [visibleSearch, setVisibleSearch] = useState<boolean>(false);
+  const [visibleSettings, setVisibleSettings] = useState<boolean>(false);
 
   useEffect(() => {
     const handleWindowKeyDown = (event: KeyboardEvent) => {
@@ -63,6 +82,12 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
       icon: Rss,
       color: "white",
       url: "/app/feed",
+    },
+    {
+      title: "Settings",
+      icon: SettingsIcon,
+      color: "white",
+      onClick: () => setVisibleSettings(true),
     },
   ];
 
@@ -119,6 +144,16 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
         onClose={() => setVisibleSearch(false)}
       >
         <Search />
+      </Modal>
+      <Modal
+        className="max-md:p-0!"
+        classWrap="max-w-3xl max-md:min-h-screen-ios max-md:rounded-none dark:shadow-[inset_0_0_0_0.0625rem_#232627,0_2rem_4rem_-1rem_rgba(0,0,0,0.33)] dark:max-md:shadow-none"
+        classButtonClose="absolute top-5 right-5 text-n-4 hover:text-primary-1"
+        classOverlay="max-md:bg-n-1"
+        visible={visibleSettings}
+        onClose={() => setVisibleSettings(false)}
+      >
+        <Settings items={settings} />
       </Modal>
     </>
   );
