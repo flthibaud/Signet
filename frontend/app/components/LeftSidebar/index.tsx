@@ -148,7 +148,7 @@ const LeftSidebar = ({ isCollapsed, setIsCollapsed }: LeftSidebarProps) => {
       <Modal
         className="max-md:p-0!"
         classWrap="max-w-3xl max-md:min-h-screen-ios max-md:rounded-none dark:shadow-[inset_0_0_0_0.0625rem_#232627,0_2rem_4rem_-1rem_rgba(0,0,0,0.33)] dark:max-md:shadow-none"
-        classButtonClose="absolute top-5 right-5 text-n-4 hover:text-primary-1"
+        classButtonClose="absolute top-5 right-5"
         classOverlay="max-md:bg-n-1"
         visible={visibleSettings}
         onClose={() => setVisibleSettings(false)}

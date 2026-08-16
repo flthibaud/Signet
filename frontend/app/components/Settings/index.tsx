@@ -25,11 +25,6 @@ const Settings = ({ items, activeItem }: SettingsProps) => {
         items[activeItem || 0]
     );
 
-    // Mirrors Tailwind's `max-md`, which is what the classes below use: under
-    // 768px the tab list becomes a dropdown, because a 13rem sidebar plus the
-    // panel does not fit. Both render the same `items`, so this has to pick one
-    // component rather than hide the other — two mounted copies would each keep
-    // their own selection and drift apart.
     const isMobile = useMediaQuery("(max-width: 767px)");
 
     return (

@@ -74,14 +74,14 @@ const Modal = ({
             {children}
             <button
               className={twMerge(
-                `text-0 fill-n-7 hover:fill-primary-1 ${
+                `text-n-7 transition-colors hover:text-primary-1 dark:text-n-1 ${
                   video &&
-                  "absolute top-6 right-6 w-10 h-10 bg-n-1 rounded-full"
+                  "absolute top-6 right-6 w-10 h-10 bg-n-1 rounded-full text-n-7!"
                 } ${classButtonClose}`,
               )}
               onClick={onClose}
             >
-              <X className="fill-inherit transition-colors" />
+              <X />
             </button>
           </DialogPanel>
         </TransitionChild>

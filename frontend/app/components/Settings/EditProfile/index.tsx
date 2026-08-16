@@ -10,10 +10,6 @@ const EditProfile = ({}: EditProfileProps) => {
     );
     const [name, setName] = useState<string>("");
 
-    // Every URL.createObjectURL pins its blob in memory until it is revoked,
-    // and picking a new file replaces the state without freeing the old one —
-    // so the previous URL is kept here and released on the next pick and on
-    // unmount. The initial value is a plain path, hence the null start.
     const previousBlobURL = useRef<string | null>(null);
 
     useEffect(

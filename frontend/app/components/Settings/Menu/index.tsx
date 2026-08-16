@@ -12,9 +12,6 @@ const Menu = ({ buttons, value, setValue }: MenuProps) => {
     };
 
     return buttons.map((button, index) => {
-        // The template shipped an <Icon name="..." /> sprite component; Signet
-        // uses lucide, whose icons stroke with currentColor, so the button's own
-        // text color drives the icon and it needs no color classes of its own.
         const Icon = button.icon;
 
         return (
