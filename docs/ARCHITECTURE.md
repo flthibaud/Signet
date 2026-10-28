@@ -643,8 +643,8 @@ articles du flux en tâche de fond. Sur 200 lignes d'OPML, ce sont 200 goroutine
 qui fetchent et scrapent des flux entiers en même temps. D'où
 `SubscribeOptions.DeferImport` : l'import OPML marque les flux comme dus puis
 réveille le scheduler **une fois**, et c'est son pool de workers — avec son rate
-limiting par domaine — qui fait le travail. Un tick ne traitant que `batchSize`
-flux, un gros import se remplit sur plusieurs passes.
+limiting par domaine — qui fait le travail. Le tick ainsi réveillé enchaîne les
+lots de `batchSize` flux jusqu'à avoir traité tous les flux dus.
 
 **Le 304 qui vide la bibliothèque.** S'abonner à un flux que l'instance connaît
 déjà envoie un `If-None-Match` avec l'ETag stocké. Le serveur répond `304`,

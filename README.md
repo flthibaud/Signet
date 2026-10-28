@@ -99,7 +99,7 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `TRUSTED_PROXY_COUNT` | `0` | How many reverse proxies sit in front. See below — the default is wrong behind one |
 | `SCHEDULER_INTERVAL` | `15m` | Feed synchronization period |
 | `SCHEDULER_WORKERS` | `5` | Concurrent sync workers |
-| `SCHEDULER_BATCH_SIZE` | `50` | Feeds processed per tick |
+| `SCHEDULER_BATCH_SIZE` | `50` | Feeds claimed at once; a tick works through every due feed batch by batch |
 | `SESSION_TTL` | `720h` | Session **idle** timeout; the expiry slides forward while the session is used |
 | `REGISTRATION_ENABLED` | `false` | Whether anyone can sign up. Closed, `POST /v1/users` returns 403 and the sign-up tab is hidden; the first account stays creatable while the instance has none |
 | `HSTS_MAX_AGE` | `31536000` | HSTS lifetime in seconds; `0` disables the header. Only ever sent over HTTPS |
