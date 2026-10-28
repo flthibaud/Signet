@@ -152,6 +152,17 @@ func (app *application) clientIP(r *http.Request) string {
 	return candidate
 }
 
+// alwaysRateLimited lists the "method path" pairs throttled even when
+// RATE_LIMITER_ENABLED is off. Each request costs a bcrypt round (~250ms of CPU)
+// on a public endpoint, so unthrottled they are both an open door to password
+// guessing and a cheap way to pin every core. Throttling them alone stays safe
+// behind a proxy left at TRUSTED_PROXY_COUNT=0, where everyone shares one
+// bucket: sign-ins come far below the limit, unlike the rest of the API.
+var alwaysRateLimited = map[string]struct{}{
+	http.MethodPost + " /v1/tokens/authentication": {},
+	http.MethodPost + " /v1/users":                 {},
+}
+
 func (app *application) rateLimit(next http.Handler) http.Handler {
 	type client struct {
 		limiter  *rate.Limiter
@@ -164,26 +175,24 @@ func (app *application) rateLimit(next http.Handler) http.Handler {
 	)
 
 	// Evicting idle clients keeps the map from growing with every address ever
-	// seen. Only worth running when the limiter is on — the map stays empty
-	// otherwise, and the configuration is fixed by the time the chain is built.
-	if app.config.limiter.enabled {
-		go func() {
-			for {
-				time.Sleep(time.Minute)
+	// seen.
+	go func() {
+		for {
+			time.Sleep(time.Minute)
 
-				mu.Lock()
-				for ip, client := range clients {
-					if time.Since(client.lastSeen) > 3*time.Minute {
-						delete(clients, ip)
-					}
+			mu.Lock()
+			for ip, client := range clients {
+				if time.Since(client.lastSeen) > 3*time.Minute {
+					delete(clients, ip)
 				}
-				mu.Unlock()
 			}
-		}()
-	}
+			mu.Unlock()
+		}
+	}()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, apiPrefix) {
+		_, always := alwaysRateLimited[r.Method+" "+r.URL.Path]
+		if always || (app.config.limiter.enabled && strings.HasPrefix(r.URL.Path, apiPrefix)) {
 			ip := app.clientIP(r)
 			mu.Lock()
 			if _, found := clients[ip]; !found {

@@ -33,7 +33,7 @@ The goal is a lightweight, self-hostable alternative: a single Go binary (fronte
 - **Deduplication**: the article is stored once, `links` carries the per-user state
 - Per-user reading state: read, favorite, archived, progress, unique slug
 - **Full-text search**, multilingual and accent-insensitive, with per-feed and per-date filters
-- Per-IP rate limiting on the API (`/v1/*` only, disabled by default)
+- Per-IP rate limiting on the API (`/v1/*` only, disabled by default — except sign-in and sign-up, which are always limited)
 
 ## Quick start
 
@@ -93,7 +93,7 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `AUTO_MIGRATE` | `true` | Applies pending migrations at startup |
 | `PORT` | `8000` | HTTP listen port |
 | `ENV` | `` (`production` via compose) | Environment name; `production` enables the `Secure` flag on the auth cookie |
-| `RATE_LIMITER_ENABLED` | `false` | Per-IP rate limiting on `/v1/*` |
+| `RATE_LIMITER_ENABLED` | `false` | Per-IP rate limiting on `/v1/*` (sign-in and sign-up are limited regardless) |
 | `RATE_LIMITER_RPS` | `5` | Requests per second per IP |
 | `RATE_LIMITER_BURST` | `10` | Bucket size |
 | `TRUSTED_PROXY_COUNT` | `0` | How many reverse proxies sit in front. See below — the default is wrong behind one |
@@ -109,7 +109,7 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `SOLVER_TIMEOUT` | `60s` | Budget for one browser solve |
 | `SOLVER_MAX_PER_FEED` | `5` | Cap on solves per feed run |
 
-The rate limiter is **disabled by default**: a self-hoster serving a handful of trusted users does not need it. It only applies to `/v1/*`.
+The rate limiter is **disabled by default**: a self-hoster serving a handful of trusted users does not need it. It only applies to `/v1/*`. Sign-in (`POST /v1/tokens/authentication`) and sign-up (`POST /v1/users`) are the exception and are always limited, with the same `RATE_LIMITER_RPS` / `RATE_LIMITER_BURST`: each request costs a bcrypt round, so leaving them open would allow unthrottled password guessing and an easy way to saturate the CPU.
 
 Registration is **closed by default**, so an instance you put on the internet does not hand out accounts to whoever finds it. Sign-ups stay open while the database holds no user, which is what lets you create your own account on a fresh install — after that the door shuts on its own. Set `REGISTRATION_ENABLED=true` to open it to other people.
 
