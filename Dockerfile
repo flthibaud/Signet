@@ -13,7 +13,7 @@ COPY frontend/ ./
 RUN pnpm build
 
 # Stage 2: Build Go binary
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.26-alpine AS go-builder
 
 # Stamped into the binary and reported by /v1/healthcheck. CI passes the tag it
 # is building; a plain `docker build` leaves the default, so an image nobody

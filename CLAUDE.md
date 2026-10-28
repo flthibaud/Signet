@@ -16,7 +16,7 @@ The app is named **Signet**. The Go module is `github.com/flthibaud/signet` (roo
 
 ## Commands
 
-### Backend (Go 1.25)
+### Backend (Go 1.26)
 ```bash
 go run ./cmd/api          # Run API server (reads .env; serves API + embedded frontend)
 go build -o bin/api ./cmd/api

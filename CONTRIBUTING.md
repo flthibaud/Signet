@@ -8,7 +8,7 @@ The fastest path is the [devcontainer](.devcontainer/devcontainer.json), which b
 
 > *VSCode → `Dev Containers: Reopen in Container`*
 
-Without it you need **Go 1.25+**, **Node.js 22+ with pnpm**, and **PostgreSQL 14+**.
+Without it you need **Go 1.26+**, **Node.js 22+ with pnpm**, and **PostgreSQL 14+**.
 
 ```bash
 git clone https://github.com/flthibaud/Signet.git && cd Signet

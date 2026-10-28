@@ -17,7 +17,7 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  GO_VERSION: "1.25.x"
+  GO_VERSION: "1.26.x"
   NODE_VERSION: "22"
 
 jobs:
