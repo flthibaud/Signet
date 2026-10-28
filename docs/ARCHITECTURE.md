@@ -163,7 +163,7 @@ secureHeaders → recoverPanic → rateLimit → authenticate → requireAuthent
 
 1. **secureHeaders** : Pose les en-têtes de sécurité sur *toutes* les réponses (voir ci-dessous). En premier pour qu'un 429 ou une panic récupérée les portent aussi.
 2. **recoverPanic** : Capture les panics et retourne une erreur 500
-3. **rateLimit** : Limite par IP client (configurable RPS + burst, voir ci-dessous)
+3. **rateLimit** : Limite par IP client (configurable RPS + burst, voir ci-dessous). Désactivé par défaut, sauf pour la connexion et l'inscription (`alwaysRateLimited`), limitées en permanence : chaque requête coûte un bcrypt, donc sans limite c'est du bruteforce de mots de passe gratuit et une façon simple de saturer le CPU
 4. **authenticate** : Valide le token Bearer ou le cookie `auth_token`, attache l'user au contexte — un token absent ou périmé donne `data.AnonymousUser`, pas un 401 (les pages invité du SPA doivent rester accessibles)
 5. **requireAuthenticatedUser** : Renvoie 401 sur tout `/v1/` pour un user anonyme. Les exceptions sont listées dans `publicAPIRoutes` : `GET /v1/healthcheck`, `GET /v1/readiness`, `POST /v1/users`, `POST` et `DELETE /v1/tokens/authentication` (le logout doit pouvoir expirer un cookie périmé). Une nouvelle route est donc protégée par défaut.
 
@@ -787,9 +787,9 @@ LIMIT 20;
 | `ENV` | Environnement | `development`, `production` |
 | `PORT` | Port du serveur | `4000` |
 | `DATABASE_URL` | Connection PostgreSQL | `postgres://user:pass@host/db` |
-| `RATE_LIMITER_RPS` | Requêtes/seconde par IP | `2` |
-| `RATE_LIMITER_BURST` | Capacité burst | `4` |
-| `RATE_LIMITER_ENABLED` | Activer le rate limiting | `true` |
+| `RATE_LIMITER_RPS` | Requêtes/seconde par IP | `5` |
+| `RATE_LIMITER_BURST` | Capacité burst | `10` |
+| `RATE_LIMITER_ENABLED` | Activer le rate limiting sur `/v1/*` (connexion et inscription sont limitées dans tous les cas) | `false` |
 | `HSTS_MAX_AGE` | Durée HSTS en secondes, `0` pour désactiver | `31536000` |
 | `REGISTRATION_ENABLED` | Ouverture des inscriptions (fermé par défaut) | `true` |
 | `FETCH_ALLOW_PRIVATE_NETWORKS` | Autorise les fetches vers le réseau privé | `false` |
