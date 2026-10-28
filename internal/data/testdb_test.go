@@ -77,6 +77,7 @@ type articleFixture struct {
 	author      string
 	imageURL    string
 	textContent string
+	readingTime float64
 	publishedAt *time.Time
 }
 
@@ -95,10 +96,10 @@ func seedArticle(t *testing.T, db *sql.DB, f articleFixture) int64 {
 
 	var id int64
 	err := db.QueryRowContext(context.Background(), `
-		INSERT INTO articles (url, hash, title, description, author, image_url, text_content, published_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO articles (url, hash, title, description, author, image_url, text_content, reading_time_minutes, published_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id`,
-		f.url, hash, f.title, f.description, f.author, f.imageURL, f.textContent, f.publishedAt,
+		f.url, hash, f.title, f.description, f.author, f.imageURL, f.textContent, f.readingTime, f.publishedAt,
 	).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed article: %v", err)

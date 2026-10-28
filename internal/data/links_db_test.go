@@ -24,6 +24,7 @@ func TestListForUserReturnsEveryDeclaredField(t *testing.T) {
 		author:      "An author",
 		imageURL:    "https://example.test/cover.png",
 		textContent: "A body long enough to earn a reading time.",
+		readingTime: 2.5,
 		publishedAt: &published,
 	})
 
@@ -77,8 +78,8 @@ func TestListForUserReturnsEveryDeclaredField(t *testing.T) {
 	if got.ImageURL != "https://example.test/cover.png" {
 		t.Errorf("ImageURL = %q, want the article's own image", got.ImageURL)
 	}
-	if got.ReadingTime <= 0 {
-		t.Errorf("ReadingTime = %v, want the value trigger_calc_reading_time derived", got.ReadingTime)
+	if got.ReadingTime != 2.5 {
+		t.Errorf("ReadingTime = %v, want 2.5", got.ReadingTime)
 	}
 	if got.FeedTitle == nil || *got.FeedTitle != "Test feed" {
 		t.Errorf("FeedTitle = %v, want \"Test feed\"", got.FeedTitle)

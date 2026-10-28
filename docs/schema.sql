@@ -266,29 +266,6 @@ BEGIN
 END;
 $$ LANGUAGE 'plpgsql';
 
--- Fonction de calcul du temps de lecture
-CREATE OR REPLACE FUNCTION calculate_reading_time()
-RETURNS TRIGGER AS $$
-DECLARE
-    words_per_minute CONSTANT INTEGER := 225;
-    word_count INTEGER;
-BEGIN
-    -- Si le contenu est vide ou NULL
-    IF NEW.text_content IS NULL OR LENGTH(NEW.text_content) = 0 THEN
-        NEW.reading_time_minutes := 0;
-        RETURN NEW;
-    END IF;
-
-    -- Compte des mots
-    word_count := array_length(regexp_split_to_array(TRIM(NEW.text_content), '\s+'), 1);
-
-    -- Calcul et assignation
-    NEW.reading_time_minutes := CEIL(word_count::FLOAT / words_per_minute);
-
-    RETURN NEW;
-END;
-$$ LANGUAGE 'plpgsql';
-
 -- ============================================================================
 -- TRIGGERS
 -- ============================================================================
@@ -309,11 +286,6 @@ CREATE TRIGGER update_links_modtime
 CREATE TRIGGER update_highlights_modtime 
   BEFORE UPDATE ON highlights 
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Calcul automatique du temps de lecture
-CREATE TRIGGER trigger_calc_reading_time
-  BEFORE INSERT OR UPDATE ON articles
-  FOR EACH ROW EXECUTE FUNCTION calculate_reading_time();
 
 -- Copie dénormalisée de la date de publication sur links
 CREATE TRIGGER trigger_set_link_published_at

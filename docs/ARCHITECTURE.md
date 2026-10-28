@@ -400,7 +400,7 @@ description           TEXT
 author                TEXT
 image_url             TEXT
 page_type             TEXT               -- 'article', 'video', 'pdf'
-reading_time_minutes  REAL               -- Calculé automatiquement
+reading_time_minutes  REAL               -- Calculé par le fetcher (200 mots/min, ≤ 500)
 original_html         TEXT               -- HTML brut (debug/fallback)
 content               TEXT               -- HTML nettoyé
 text_content          TEXT NOT NULL      -- Texte pour recherche
