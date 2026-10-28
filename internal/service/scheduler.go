@@ -176,38 +176,53 @@ func (s *Scheduler) Stop() {
 	s.logger.PrintInfo("scheduler stopped", nil)
 }
 
+// syncFeeds claims due feeds batch after batch until none is left. One batch per
+// tick capped the instance at SCHEDULER_BATCH_SIZE feeds per interval, so past
+// that many feeds each one was refreshed less often than configured. The batch
+// still bounds how many feeds sit claimed at once, which is what keeps their
+// locks from going stale before a worker reaches them.
+//
+// The loop ends because every processed feed leaves the due set: success and
+// failure both stamp last_fetched_at.
 func (s *Scheduler) syncFeeds() {
 	ctx := s.ctx
 
-	feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
-	if err != nil {
-		s.logBackgroundError(err, "scheduler")
-		return
-	}
+	for ctx.Err() == nil {
+		feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
+		if err != nil {
+			s.logBackgroundError(err, "scheduler")
+			return
+		}
 
-	if len(feeds) == 0 {
-		return
-	}
+		if len(feeds) == 0 {
+			return
+		}
 
-	s.logger.PrintInfo("syncing feeds", map[string]string{
-		"count": strconv.Itoa(len(feeds)),
-	})
-
-	feedsChan := make(chan *feedSyncJob, len(feeds))
-	for _, f := range feeds {
-		feedsChan <- &feedSyncJob{feed: f}
-	}
-	close(feedsChan)
-
-	var workerWg sync.WaitGroup
-	for range s.workers {
-		workerWg.Go(func() {
-			for job := range feedsChan {
-				s.processFeed(ctx, job)
-			}
+		s.logger.PrintInfo("syncing feeds", map[string]string{
+			"count": strconv.Itoa(len(feeds)),
 		})
+
+		feedsChan := make(chan *feedSyncJob, len(feeds))
+		for _, f := range feeds {
+			feedsChan <- &feedSyncJob{feed: f}
+		}
+		close(feedsChan)
+
+		var workerWg sync.WaitGroup
+		for range s.workers {
+			workerWg.Go(func() {
+				for job := range feedsChan {
+					s.processFeed(ctx, job)
+				}
+			})
+		}
+		workerWg.Wait()
+
+		// A short batch was everything that was due.
+		if len(feeds) < s.batchSize {
+			return
+		}
 	}
-	workerWg.Wait()
 }
 
 type feedSyncJob struct {

@@ -34,30 +34,34 @@ func TestFeedDeactivationIsNotPermanent(t *testing.T) {
 	m := FeedModel{DB: db}
 
 	id := seedFeed(t, db, "Test feed", "")
-	// Backdate the last success, so the stamp below is visible.
+	// Backdate the last attempt, so the stamp below is visible.
 	exec(t, db, `UPDATE feeds SET last_fetched_at = NOW() - interval '1 hour' WHERE id = $1`, id)
 	before := readFeedState(t, db, id)
 
-	for range 9 {
+	if _, err := m.MarkFeedFailed(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	// Without the stamp, a scheduler pass draining due feeds would claim the
+	// feed it just failed straight back.
+	if s := readFeedState(t, db, id); !s.lastFetchedAt.After(before.lastFetchedAt) {
+		t.Fatal("a failure should stamp last_fetched_at")
+	}
+
+	for range 8 {
 		if _, err := m.MarkFeedFailed(ctx, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s := readFeedState(t, db, id)
-	if !s.active || !s.lastFetchedAt.Equal(before.lastFetchedAt) {
-		t.Fatalf("after 9 failures: active=%v last_fetched_at moved=%v, want still active and unchanged",
-			s.active, !s.lastFetchedAt.Equal(before.lastFetchedAt))
+	if !s.active {
+		t.Fatal("after 9 failures the feed should still be active")
 	}
 
 	if _, err := m.MarkFeedFailed(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	s = readFeedState(t, db, id)
-	if s.active {
+	if s = readFeedState(t, db, id); s.active {
 		t.Fatal("after 10 failures the feed should be deactivated")
-	}
-	if !s.lastFetchedAt.After(before.lastFetchedAt) {
-		t.Fatal("deactivation should stamp last_fetched_at, which spaces the daily retries")
 	}
 
 	if err := m.ReleaseFeed(ctx, id, "", ""); err != nil {

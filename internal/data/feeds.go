@@ -279,16 +279,17 @@ func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModi
 // MarkFeedFailed increments the failure counter and deactivates the feed after
 // 10 consecutive failures.
 //
-// A deactivated feed's failures also stamp last_fetched_at, which is what spaces
-// its retries deadFeedRetryInterval apart in GetFeedsToSync; an active feed keeps
-// it at its last success so it is retried on the very next tick.
+// A failure stamps last_fetched_at like a success does, so the column means
+// "last attempt". That is what keeps the scheduler, which drains every due feed
+// in one pass, from claiming a feed that just failed again within that pass, and
+// what spaces a deactivated feed's retries deadFeedRetryInterval apart.
 func (m FeedModel) MarkFeedFailed(ctx context.Context, feedID int64) (int, error) {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NULL,
 		    consecutive_failures = consecutive_failures + 1,
 		    is_active = CASE WHEN consecutive_failures + 1 >= 10 THEN FALSE ELSE is_active END,
-		    last_fetched_at = CASE WHEN consecutive_failures + 1 >= 10 THEN NOW() ELSE last_fetched_at END
+		    last_fetched_at = NOW()
 		WHERE id = $1
 		RETURNING consecutive_failures`
 

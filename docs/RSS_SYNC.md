@@ -101,9 +101,9 @@ RETURNING id, url, http_etag, http_last_modified;
 ```
 
 **Notes :**
-- `last_fetched_at` n'est **pas** mis à jour ici. Il sera mis à jour uniquement après un fetch réussi, ce qui évite de devoir restaurer sa valeur précédente en cas d'échec.
+- `last_fetched_at` n'est **pas** mis à jour ici, mais à la fin de la tentative, qu'elle réussisse (`ReleaseFeed`) ou échoue (`MarkFeedFailed`) : c'est la date de la dernière tentative. Sans l'écriture en cas d'échec, `syncFeeds`, qui enchaîne les lots, reprendrait aussitôt un feed qui vient d'échouer.
 - `$2` est la fenêtre de lock (`data.SyncLockWindow`, 10 min, constante) : `fetching_since` remplace le booléen `is_fetching`, donc si un worker crash le lock expire automatiquement et le feed redevient éligible au prochain tick. Elle doit rester au-dessus de `feedProcessTimeout` (8 min).
-- `$4` est `deadFeedRetryInterval` (24 h) : un feed désactivé reste éligible une fois par jour. `MarkFeedFailed` réécrit `last_fetched_at` à chaque échec d'un feed désactivé, sinon un feed mort depuis plus d'un jour serait retenté à chaque tick.
+- `$4` est `deadFeedRetryInterval` (24 h) : un feed désactivé reste éligible une fois par jour, compté depuis sa dernière tentative (`MarkFeedFailed` écrit `last_fetched_at` à chaque échec).
 - `$3` est l'intervalle de rafraîchissement, dérivé de `SCHEDULER_INTERVAL` — c'est le même paramètre qui pilote le ticker, sinon régler `SCHEDULER_INTERVAL` n'aurait aucun effet sur la fréquence réelle. On applique une marge de 10 % (`syncIntervalSlack`) parce que `last_fetched_at` est écrit à la *fin* du sync, quelques secondes après le tick qui l'a lancé : sans cette marge, un feed raterait systématiquement le tick suivant et ne serait rafraîchi qu'un tick sur deux.
 
 #### 4. Distribution aux abonnés (`internal/service/fetcher.go`)
@@ -121,9 +121,9 @@ Pour chaque feed à synchroniser :
      a. Mettre fetching_since = NULL, last_fetched_at = NOW(),
         consecutive_failures = 0, loguer le succès, et passer au feed suivant.
   3. Si erreur (timeout, 4xx, 5xx) :
-     a. Incrémenter consecutive_failures.
-     b. Si consecutive_failures >= 10, mettre is_active = FALSE, last_fetched_at = NOW()
-        (c'est ce qui espace les tentatives d'un jour) et loguer un warning.
+     a. Incrémenter consecutive_failures, mettre last_fetched_at = NOW().
+     b. Si consecutive_failures >= 10, mettre is_active = FALSE et loguer un warning
+        (le feed n'est plus retenté qu'une fois par jour).
      c. Mettre fetching_since = NULL (libérer le lock).
   4. Si HTTP 200 (nouveau contenu) :
      a. Parser le flux, sauvegarder les nouveaux etag/last-modified.
@@ -139,6 +139,8 @@ Pour chaque feed à synchroniser :
 ### Distribution des feeds aux workers
 
 Les feeds récupérés par `GetFeedsToSync` (jusqu'à `SCHEDULER_BATCH_SIZE`) sont envoyés dans un channel buffered. Les `SCHEDULER_WORKERS` goroutines consomment ce channel en parallèle. Chaque worker traite un feed à la fois jusqu'à ce que le channel soit vide.
+
+Un tick ne s'arrête pas au premier lot : `syncFeeds` réclame un nouveau lot tant que le précédent était plein, si bien que tous les feeds dus passent à chaque intervalle quel que soit leur nombre. Le lot ne sert plus qu'à borner le nombre de feeds verrouillés en même temps, pour que leur lock n'expire pas avant qu'un worker les atteigne. La boucle termine parce qu'un feed traité sort des feeds dus : succès comme échec écrivent `last_fetched_at`.
 
 ```go
 feedsChan := make(chan Feed, len(feeds))
@@ -168,7 +170,7 @@ Pour éviter de bombarder un même serveur avec plusieurs requêtes simultanées
 |----------|-------------|--------|
 | `SCHEDULER_INTERVAL` | Intervalle entre chaque sync | `15m` |
 | `SCHEDULER_WORKERS` | Nombre de workers concurrents | `5` |
-| `SCHEDULER_BATCH_SIZE` | Nombre max de feeds par tick | `50` |
+| `SCHEDULER_BATCH_SIZE` | Nombre max de feeds réclamés à la fois (un tick enchaîne les lots jusqu'à épuisement des feeds dus) | `50` |
 
 ---
 
