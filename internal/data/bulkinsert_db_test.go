@@ -31,9 +31,12 @@ func TestBulkInsertForArticle(t *testing.T) {
 	}
 
 	for _, userID := range []uuid.UUID{first, second} {
-		exists, err := model.Exists(ctx, userID, articleID)
+		var exists bool
+		err := db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM links WHERE user_id = $1 AND article_id = $2)`,
+			userID, articleID).Scan(&exists)
 		if err != nil {
-			t.Fatalf("Exists(%s): %v", userID, err)
+			t.Fatalf("link lookup for %s: %v", userID, err)
 		}
 		if !exists {
 			t.Errorf("user %s has no link for the article", userID)

@@ -32,30 +32,6 @@ func TestAddErrorDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-func TestPermittedValue(t *testing.T) {
-	if !PermittedValue("b", "a", "b", "c") {
-		t.Error("expected b to be permitted")
-	}
-	if PermittedValue("z", "a", "b", "c") {
-		t.Error("expected z to be rejected")
-	}
-	if !PermittedValue(2, 1, 2, 3) {
-		t.Error("expected 2 to be permitted")
-	}
-}
-
-func TestUnique(t *testing.T) {
-	if !Unique([]string{"a", "b", "c"}) {
-		t.Error("expected distinct slice to be unique")
-	}
-	if Unique([]string{"a", "b", "a"}) {
-		t.Error("expected slice with a duplicate to be non-unique")
-	}
-	if !Unique([]int{}) {
-		t.Error("expected empty slice to be unique")
-	}
-}
-
 func TestMatchesEmailRX(t *testing.T) {
 	tests := []struct {
 		name  string

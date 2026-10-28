@@ -38,35 +38,6 @@ type FeedModel struct {
 	DB *sql.DB
 }
 
-// Get returns the feed with the given ID. Feeds are not user-scoped, so no
-// ownership check applies. Returns sql.ErrNoRows if no feed has that ID —
-// unlike GetByURL, which maps it to ErrRecordNotFound.
-func (m FeedModel) Get(ctx context.Context, id int64) (*Feed, error) {
-	var feed Feed
-
-	query := `
-		SELECT id, url, original_title, site_url, is_active, created_at, image_url, last_fetched_at
-		FROM feeds
-		WHERE id = $1`
-
-	err := m.DB.QueryRowContext(ctx, query, id).Scan(
-		&feed.ID,
-		&feed.Url,
-		&feed.Title,
-		&feed.SiteUrl,
-		&feed.IsActive,
-		&feed.CreatedAt,
-		&feed.ImageUrl,
-		&feed.LastFetchedAt,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &feed, nil
-}
-
 // Insert stores a feed and fills in the generated columns on feed, including
 // its ID and conditional-request headers.
 //
@@ -121,8 +92,8 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 // library until the feed happened to publish something. Clearing the headers
 // forces a 200 and a full re-read.
 //
-// last_fetched_at is set to the epoch rather than NULL because Get and GetByURL
-// scan that column into a plain time.Time.
+// last_fetched_at is set to the epoch rather than NULL because GetByURL
+// scans that column into a plain time.Time.
 //
 // It also revives a feed MarkFeedFailed switched off: someone asking for it is
 // reason enough to try it again now rather than at its next daily retry.

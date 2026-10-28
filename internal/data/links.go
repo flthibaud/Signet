@@ -242,25 +242,6 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 	return &link, nil
 }
 
-// Exists reports whether the user already has this article in their library.
-// The import path checks it before creating a link, so re-reading a feed does
-// not hand the same article to a user twice.
-func (m LinkModel) Exists(ctx context.Context, userID uuid.UUID, articleID int64) (bool, error) {
-	query := `
-		SELECT EXISTS(
-			SELECT 1 FROM links
-			WHERE user_id = $1 AND article_id = $2
-		)`
-
-	var exists bool
-	err := m.DB.QueryRowContext(ctx, query, userID, articleID).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-
-	return exists, nil
-}
-
 // BulkInsertForArticle creates links for multiple users in a single query.
 // Uses ON CONFLICT DO NOTHING to skip users who already have this article.
 //
