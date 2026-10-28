@@ -72,6 +72,7 @@ func TestSearchRanksAndHighlights(t *testing.T) {
 		title:       "A study of peregrines",
 		description: "Peregrine falcons hunt at remarkable speed.",
 		textContent: "The peregrine falcon is the fastest animal on the planet.",
+		readingTime: 2.5,
 	})
 	slug := seedLink(t, db, userID, articleID, linkFixture{})
 
@@ -102,8 +103,8 @@ func TestSearchRanksAndHighlights(t *testing.T) {
 	if got.Title != "A study of peregrines" {
 		t.Errorf("Title = %q", got.Title)
 	}
-	if got.ReadingTime <= 0 {
-		t.Errorf("ReadingTime = %v, want the value trigger_calc_reading_time derived", got.ReadingTime)
+	if got.ReadingTime != 2.5 {
+		t.Errorf("ReadingTime = %v, want 2.5", got.ReadingTime)
 	}
 }
 
