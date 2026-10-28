@@ -61,7 +61,7 @@ Pour supporter la courtoisie HTTP et éviter les téléchargements inutiles, la 
 - `http_etag` (VARCHAR) : Pour stocker l'identifiant de version du flux.
 - `http_last_modified` (VARCHAR) : Pour stocker la date de dernière modification donnée par le serveur cible.
 - `fetching_since` (TIMESTAMPTZ, NULL) : Timestamp du début du fetch en cours. Remplace un simple booléen pour permettre l'auto-expiration des locks orphelins (ex: crash du worker). Un feed est considéré verrouillé si `fetching_since IS NOT NULL AND fetching_since > NOW() - INTERVAL '10 minutes'`.
-- `consecutive_failures` (INTEGER, DEFAULT 0) : Compteur d'échecs consécutifs. Le feed est automatiquement désactivé (`is_active = FALSE`) après 10 échecs consécutifs. Remis à zéro après chaque fetch réussi.
+- `consecutive_failures` (INTEGER, DEFAULT 0) : Compteur d'échecs consécutifs. Le feed est désactivé (`is_active = FALSE`) après 10 échecs consécutifs. Désactivé ne veut pas dire abandonné : il est retenté une fois par jour (`deadFeedRetryInterval`), et le premier fetch réussi le réactive. Un nouvel abonnement (formulaire ou import OPML) le réactive immédiatement via `MarkDueForSync`. Remis à zéro après chaque fetch réussi.
 
 #### 2. Scheduler (`internal/service/scheduler.go`)
 
@@ -89,7 +89,7 @@ UPDATE feeds
 SET fetching_since = NOW()
 WHERE id IN (
     SELECT id FROM feeds f
-    WHERE f.is_active = TRUE
+    WHERE (f.is_active = TRUE OR f.last_fetched_at < NOW() - make_interval(secs => $4::double precision))
       AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - make_interval(secs => $2::double precision))
       AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.feed_id = f.id)
       AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - make_interval(secs => $3::double precision))
@@ -103,6 +103,7 @@ RETURNING id, url, http_etag, http_last_modified;
 **Notes :**
 - `last_fetched_at` n'est **pas** mis à jour ici. Il sera mis à jour uniquement après un fetch réussi, ce qui évite de devoir restaurer sa valeur précédente en cas d'échec.
 - `$2` est la fenêtre de lock (`data.SyncLockWindow`, 10 min, constante) : `fetching_since` remplace le booléen `is_fetching`, donc si un worker crash le lock expire automatiquement et le feed redevient éligible au prochain tick. Elle doit rester au-dessus de `feedProcessTimeout` (8 min).
+- `$4` est `deadFeedRetryInterval` (24 h) : un feed désactivé reste éligible une fois par jour. `MarkFeedFailed` réécrit `last_fetched_at` à chaque échec d'un feed désactivé, sinon un feed mort depuis plus d'un jour serait retenté à chaque tick.
 - `$3` est l'intervalle de rafraîchissement, dérivé de `SCHEDULER_INTERVAL` — c'est le même paramètre qui pilote le ticker, sinon régler `SCHEDULER_INTERVAL` n'aurait aucun effet sur la fréquence réelle. On applique une marge de 10 % (`syncIntervalSlack`) parce que `last_fetched_at` est écrit à la *fin* du sync, quelques secondes après le tick qui l'a lancé : sans cette marge, un feed raterait systématiquement le tick suivant et ne serait rafraîchi qu'un tick sur deux.
 
 #### 4. Distribution aux abonnés (`internal/service/fetcher.go`)
@@ -121,7 +122,8 @@ Pour chaque feed à synchroniser :
         consecutive_failures = 0, loguer le succès, et passer au feed suivant.
   3. Si erreur (timeout, 4xx, 5xx) :
      a. Incrémenter consecutive_failures.
-     b. Si consecutive_failures >= 10, mettre is_active = FALSE et loguer un warning.
+     b. Si consecutive_failures >= 10, mettre is_active = FALSE, last_fetched_at = NOW()
+        (c'est ce qui espace les tentatives d'un jour) et loguer un warning.
      c. Mettre fetching_since = NULL (libérer le lock).
   4. Si HTTP 200 (nouveau contenu) :
      a. Parser le flux, sauvegarder les nouveaux etag/last-modified.

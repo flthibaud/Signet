@@ -123,6 +123,9 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 //
 // last_fetched_at is set to the epoch rather than NULL because Get and GetByURL
 // scan that column into a plain time.Time.
+//
+// It also revives a feed MarkFeedFailed switched off: someone asking for it is
+// reason enough to try it again now rather than at its next daily retry.
 func (m FeedModel) MarkDueForSync(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
@@ -133,7 +136,9 @@ func (m FeedModel) MarkDueForSync(ctx context.Context, ids []int64) error {
 		SET last_fetched_at = to_timestamp(0),
 		    fetching_since = NULL,
 		    http_etag = '',
-		    http_last_modified = ''
+		    http_last_modified = '',
+		    is_active = TRUE,
+		    consecutive_failures = 0
 		WHERE id = ANY($1)`
 
 	_, err := m.DB.ExecContext(ctx, query, pq.Array(ids))
@@ -204,16 +209,23 @@ const SyncLockWindow = 10 * time.Minute
 // tick after the next one and halve the effective refresh rate.
 const syncIntervalSlack = 0.9
 
+// deadFeedRetryInterval is how often a feed MarkFeedFailed switched off is
+// tried again. Deactivation slows a failing feed down rather than ending it: a
+// site down for an afternoon would otherwise be dropped for every subscriber,
+// with nothing to bring it back.
+const deadFeedRetryInterval = 24 * time.Hour
+
 // GetFeedsToSync atomically claims a batch of feeds ready for synchronization.
 // A feed is due once refreshInterval has elapsed since its last successful
-// fetch. Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
+// fetch, or, once deactivated, deadFeedRetryInterval since its last attempt.
+// Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
 func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInterval time.Duration) ([]*Feed, error) {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NOW()
 		WHERE id IN (
 			SELECT id FROM feeds f
-			WHERE f.is_active = TRUE
+			WHERE (f.is_active = TRUE OR f.last_fetched_at < NOW() - make_interval(secs => $4::double precision))
 			  AND (f.fetching_since IS NULL OR f.fetching_since < NOW() - make_interval(secs => $2::double precision))
 			  AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.feed_id = f.id)
 			  AND (f.last_fetched_at IS NULL OR f.last_fetched_at < NOW() - make_interval(secs => $3::double precision))
@@ -227,6 +239,7 @@ func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInt
 		batchSize,
 		SyncLockWindow.Seconds(),
 		refreshInterval.Seconds()*syncIntervalSlack,
+		deadFeedRetryInterval.Seconds(),
 	)
 	if err != nil {
 		return nil, err
@@ -246,13 +259,15 @@ func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInt
 	return feeds, rows.Err()
 }
 
-// ReleaseFeed marks a feed as successfully synced, updating HTTP caching headers.
+// ReleaseFeed marks a feed as successfully synced, updating HTTP caching
+// headers. A success also reactivates a feed MarkFeedFailed had switched off.
 func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModified string) error {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NULL,
 		    last_fetched_at = NOW(),
 		    consecutive_failures = 0,
+		    is_active = TRUE,
 		    http_etag = $2,
 		    http_last_modified = $3
 		WHERE id = $1`
@@ -261,13 +276,19 @@ func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModi
 	return err
 }
 
-// MarkFeedFailed increments the failure counter and deactivates the feed after 10 consecutive failures.
+// MarkFeedFailed increments the failure counter and deactivates the feed after
+// 10 consecutive failures.
+//
+// A deactivated feed's failures also stamp last_fetched_at, which is what spaces
+// its retries deadFeedRetryInterval apart in GetFeedsToSync; an active feed keeps
+// it at its last success so it is retried on the very next tick.
 func (m FeedModel) MarkFeedFailed(ctx context.Context, feedID int64) (int, error) {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NULL,
 		    consecutive_failures = consecutive_failures + 1,
-		    is_active = CASE WHEN consecutive_failures + 1 >= 10 THEN FALSE ELSE is_active END
+		    is_active = CASE WHEN consecutive_failures + 1 >= 10 THEN FALSE ELSE is_active END,
+		    last_fetched_at = CASE WHEN consecutive_failures + 1 >= 10 THEN NOW() ELSE last_fetched_at END
 		WHERE id = $1
 		RETURNING consecutive_failures`
 
