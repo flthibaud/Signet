@@ -129,7 +129,7 @@ The project ships a [devcontainer](.devcontainer/devcontainer.json) (VSCode / Gi
 
 ### Locally
 
-Requirements: Go 1.25+, Node.js 22+ with pnpm, PostgreSQL 14+. The [golang-migrate](https://github.com/golang-migrate/migrate) CLI is only needed for the `make migrate-*` targets below — creating a migration, rolling back, forcing a version. The server itself applies migrations on its own.
+Requirements: Go 1.26+, Node.js 22+ with pnpm, PostgreSQL 14+. The [golang-migrate](https://github.com/golang-migrate/migrate) CLI is only needed for the `make migrate-*` targets below — creating a migration, rolling back, forcing a version. The server itself applies migrations on its own.
 
 ```bash
 go run ./cmd/api                      # migrates, then serves the API + embedded frontend, port 8000
@@ -162,7 +162,7 @@ go build -o bin/api ./cmd/api
 
 ## Architecture
 
-- **Go 1.25** + [`httprouter`](https://github.com/julienschmidt/httprouter), PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
+- **Go 1.26** + [`httprouter`](https://github.com/julienschmidt/httprouter), PostgreSQL via [`lib/pq`](https://github.com/lib/pq)
 - [`gofeed`](https://github.com/mmcdole/gofeed) (RSS/Atom), [`go-readability`](https://codeberg.org/readeck/go-readability) (extraction), [`bluemonday`](https://github.com/microcosm-cc/bluemonday) (sanitization), [`tls-client`](https://github.com/bogdanfinn/tls-client) (browser fingerprint)
 - **React 19** + **React Router v7** in **SPA mode** (`ssr: false`), **TailwindCSS v4**, **TanStack Query**, **react-hook-form** + **zod**
 - PostgreSQL schema with triggers and `citext`. Full-text search relies on a multilingual, accent-insensitive `tsvector`, maintained by a generated column and weighted across title/description/content, exposed by `GET /v1/search`.
