@@ -14,8 +14,9 @@ type UpdateLinkInput = {
  * Updates a link's per-user state (read / starred / archived / reading
  * progress). Only the fields provided are sent, matching the backend's partial
  * PATCH semantics. On success it refreshes the article river and the
- * subscription unread counts, and patches the cached article so the open page
- * reflects the new state without a refetch.
+ * subscription unread counts when the read, starred or archived state changed,
+ * and patches the cached article so the open page reflects the new state
+ * without a refetch.
  */
 export function useUpdateLink() {
   const queryClient = useQueryClient();
@@ -39,9 +40,15 @@ export function useUpdateLink() {
           }),
         }),
       }),
-    onSuccess: (_data, { slug, isRead, isStarred, readingProgress }) => {
-      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
-      queryClient.invalidateQueries({ queryKey: ["links"] });
+    onSuccess: (_data, { slug, isRead, isStarred, archived, readingProgress }) => {
+      // The reader saves progress every few seconds while scrolling, and the
+      // sidebar stays mounted: invalidating on those saves refetched its
+      // library-wide unread counts each time. Progress is not in the counts, and
+      // the river refetches it on its own when it mounts again.
+      if (isRead !== undefined || isStarred !== undefined || archived !== undefined) {
+        queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+        queryClient.invalidateQueries({ queryKey: ["links"] });
+      }
       queryClient.setQueryData(
         ["article", slug],
         (
