@@ -55,29 +55,9 @@ func (v *Validator) Check(ok bool, key, message string) {
 	}
 }
 
-// PermittedValue reports whether value is one of permittedValues — for fields
-// that accept a fixed set, such as a sort key or a status.
-func PermittedValue[T comparable](value T, permittedValues ...T) bool {
-	for i := range permittedValues {
-		if value == permittedValues[i] {
-			return true
-		}
-	}
-	return false
-}
-
 // Matches returns true if a string value matches a specific regexp pattern.
 func Matches(value string, rx *regexp.Regexp) bool {
 	return rx.MatchString(value)
-}
-
-// Unique reports whether values contains no duplicates.
-func Unique[T comparable](values []T) bool {
-	uniqueValues := make(map[T]bool)
-	for _, value := range values {
-		uniqueValues[value] = true
-	}
-	return len(values) == len(uniqueValues)
 }
 
 // IsURL reports whether str is a syntactically valid absolute http(s) URL.

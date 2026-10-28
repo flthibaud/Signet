@@ -17,7 +17,6 @@ import (
 // Token scopes. The scope is part of every lookup, so a token minted for one
 // purpose cannot be replayed against another.
 const (
-	ScopeActivation     = "activation"
 	ScopeAuthentication = "authentication"
 )
 
@@ -124,21 +123,6 @@ func (m TokenModel) Insert(token *Token) error {
 	defer cancel()
 
 	_, err := m.DB.ExecContext(ctx, query, args...)
-	return err
-}
-
-// DeleteAllForUser deletes every token a user holds in a scope. This is
-// the "sign out everywhere" hammer — an ordinary logout uses DeleteByHash so it
-// only ends the session that asked.
-func (m TokenModel) DeleteAllForUser(scope string, userID uuid.UUID) error {
-	query := `
-		DELETE FROM tokens
-		WHERE scope = $1 AND user_id = $2`
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	_, err := m.DB.ExecContext(ctx, query, scope, userID)
 	return err
 }
 

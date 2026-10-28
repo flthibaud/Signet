@@ -339,7 +339,7 @@ Le refresh se fait avant que le handler ne s'exécute : un `Set-Cookie` doit par
 
 ### Déconnexion
 
-`DELETE /v1/tokens/authentication` ne supprime que le token présenté par la requête : `authenticate` dépose son hash dans le contexte (le hash, pas le plaintext, pour que le secret s'arrête au middleware) et le handler fait un `DeleteByHash`. Se déconnecter du téléphone laisse donc le laptop connecté. `Tokens.DeleteAllForUser` reste disponible pour un futur « se déconnecter partout ».
+`DELETE /v1/tokens/authentication` ne supprime que le token présenté par la requête : `authenticate` dépose son hash dans le contexte (le hash, pas le plaintext, pour que le secret s'arrête au middleware) et le handler fait un `DeleteByHash`. Se déconnecter du téléphone laisse donc le laptop connecté.
 
 ### Nettoyage
 

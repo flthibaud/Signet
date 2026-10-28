@@ -253,40 +253,6 @@ func (m UserModel) GetForToken(tokenScope, tokenPlaintext string) (*User, time.T
 	return &user, expiry, nil
 }
 
-// Get returns the account with the given ID. Unlike GetByEmail it does not load
-// the password hash, since no caller of this needs to verify a password.
-// Returns ErrRecordNotFound if no account has that ID.
-func (m UserModel) Get(id uuid.UUID) (*User, error) {
-	query := `
-		SELECT id, username, email, created_at
-		FROM users
-		WHERE id = $1`
-
-	var user User
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-
-	defer cancel()
-
-	err := m.DB.QueryRowContext(ctx, query, id).Scan(
-		&user.ID,
-		&user.Username,
-		&user.Email,
-		&user.CreatedAt,
-	)
-
-	if err != nil {
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			return nil, ErrRecordNotFound
-		default:
-			return nil, err
-		}
-	}
-
-	return &user, nil
-}
-
 // Insert creates the account and fills in user's generated ID and CreatedAt.
 // Returns ErrDuplicateEmail or ErrDuplicateUsername when the address or name is
 // taken; the two are told apart by which unique index the write breached, so

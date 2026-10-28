@@ -113,37 +113,3 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 
 	return err
 }
-
-// Get returns the article with the given ID, including the columns the API
-// omits (OriginalHTML, Language). Articles are instance-wide, so this carries
-// no ownership check: reach an article through a user's link to scope it.
-func (m ArticleModel) Get(ctx context.Context, id int64) (*Article, error) {
-	var article Article
-	query := `
-		SELECT id, url, hash, title, description, author, image_url, page_type, reading_time_minutes, original_html, text_content, language::text, published_at, created_at, updated_at
-		FROM articles
-		WHERE id = $1
-	`
-
-	err := m.DB.QueryRowContext(ctx, query, id).Scan(
-		&article.ID,
-		&article.Url,
-		&article.Hash,
-		&article.Title,
-		&article.Description,
-		&article.Author,
-		&article.ImageURL,
-		&article.PageType,
-		&article.ReadingTime,
-		&article.OriginalHTML,
-		&article.TextContent,
-		&article.Language,
-		&article.PublishedAt,
-		&article.CreatedAt,
-		&article.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &article, nil
-}
