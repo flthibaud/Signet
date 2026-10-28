@@ -362,6 +362,38 @@ func TestRateLimitDisabledLetsAPIThrough(t *testing.T) {
 	}
 }
 
+// Sign-in and sign-up each cost a bcrypt round, so they stay throttled when the
+// limiter is switched off for the rest of the API.
+func TestRateLimitDisabledStillLimitsPasswordRoutes(t *testing.T) {
+	for _, path := range []string{"/v1/tokens/authentication", "/v1/users"} {
+		t.Run(path, func(t *testing.T) {
+			app := newRateLimitedApp()
+			app.config.limiter.enabled = false
+
+			served := 0
+			handler := app.rateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				served++
+			}))
+
+			var lastStatus int
+			for range 5 {
+				req := httptest.NewRequest(http.MethodPost, path, nil)
+				req.RemoteAddr = "192.0.2.10:1234"
+				rr := httptest.NewRecorder()
+				handler.ServeHTTP(rr, req)
+				lastStatus = rr.Code
+			}
+
+			if served != 1 {
+				t.Errorf("%d requests served, want 1 (burst is 1)", served)
+			}
+			if lastStatus != http.StatusTooManyRequests {
+				t.Errorf("last status = %d, want %d", lastStatus, http.StatusTooManyRequests)
+			}
+		})
+	}
+}
+
 // newSecureHeadersApp builds an application with HSTS configured, wrapped
 // around a handler that just returns 200.
 func newSecureHeadersApp() (*application, http.Handler) {
