@@ -1,4 +1,3 @@
-# Stage 1: Build frontend
 FROM node:22-alpine AS frontend-builder
 
 RUN corepack enable
@@ -6,7 +5,6 @@ RUN corepack enable
 WORKDIR /app/frontend
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
-# pnpm version is pinned via the "packageManager" field in package.json
 RUN corepack pnpm install --frozen-lockfile
 
 COPY frontend/ ./
@@ -15,9 +13,6 @@ RUN pnpm build
 # Stage 2: Build Go binary
 FROM golang:1.26-alpine AS go-builder
 
-# Stamped into the binary and reported by /v1/healthcheck. CI passes the tag it
-# is building; a plain `docker build` leaves the default, so an image nobody
-# released says "dev" instead of claiming a version.
 ARG VERSION=dev
 
 WORKDIR /app
@@ -26,21 +21,18 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-# Copy built frontend assets for go:embed
+
 COPY --from=frontend-builder /app/frontend/build ./frontend/build
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
 	-ldflags="-X main.version=${VERSION}" \
 	-o /app/bin/api ./cmd/api
 
-# Stage 3: Final image
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates tzdata
 
-# Run as an unprivileged user. -H skips the home directory: the app writes
-# nothing to disk, so the image can also run with a read-only root filesystem
-# (see docker-compose.yml).
+# Run as an unprivileged user.
 RUN adduser -D -H -u 10001 signet
 
 WORKDIR /app

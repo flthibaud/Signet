@@ -1,11 +1,3 @@
-# Shapes the notes behind `gh release create --generate-notes` and the
-# "Generate release notes" button. Each entry is a merged pull request's
-# *title*, filed by the labels on that PR — so a PR title is release notes, not
-# a private note to self.
-#
-# Categories are matched top-down and the first hit wins, which is why
-# breaking-change comes first: a breaking feature carries both labels and has
-# to be read before the rest of the list, not buried among the features.
 changelog:
   exclude:
     labels:
