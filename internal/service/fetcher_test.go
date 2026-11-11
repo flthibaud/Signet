@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/flthibaud/signet/internal/data"
+	"github.com/flthibaud/signet/internal/jsonlog"
 )
 
 func TestReadFeedBody(t *testing.T) {
@@ -166,5 +170,97 @@ func TestFeedFetchErrorUnwraps(t *testing.T) {
 	cancel()
 	if !cancelledByShutdown(ctx, err) {
 		t.Error("a cancelled import wrapped as a fetch failure must still read as a shutdown")
+	}
+}
+
+// --- panic recovery -------------------------------------------------------
+
+// recordingConnector is a database/sql driver that records every query it is
+// asked to run, so a test can see what the service wrote without a database.
+type recordingConnector struct {
+	queries []string
+}
+
+func (c *recordingConnector) Connect(context.Context) (driver.Conn, error) {
+	return &recordingConn{connector: c}, nil
+}
+
+func (c *recordingConnector) Driver() driver.Driver { return recordingDriver{} }
+
+func (c *recordingConnector) ran(queryPart string) bool {
+	for _, q := range c.queries {
+		if strings.Contains(q, queryPart) {
+			return true
+		}
+	}
+	return false
+}
+
+type recordingDriver struct{}
+
+func (recordingDriver) Open(string) (driver.Conn, error) {
+	return nil, errors.New("Open is not used; the connector builds the conns")
+}
+
+type recordingConn struct{ connector *recordingConnector }
+
+func (c *recordingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("queries go through QueryContext")
+}
+func (c *recordingConn) Close() error              { return nil }
+func (c *recordingConn) Begin() (driver.Tx, error) { return nil, errors.New("no transactions") }
+
+func (c *recordingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.connector.queries = append(c.connector.queries, query)
+	return &recordingRows{}, nil
+}
+
+// recordingRows serves the single column MarkFeedFailed scans back.
+type recordingRows struct{ done bool }
+
+func (r *recordingRows) Columns() []string { return []string{"consecutive_failures"} }
+func (r *recordingRows) Close() error      { return nil }
+func (r *recordingRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	dest[0] = int64(1)
+	return nil
+}
+
+// A panic inside the import — the readability parser on a hostile page is the
+// real-world case — must come back as an error with the feed marked failed,
+// not unwind the goroutine and take the process down. The post-subscribe
+// import runs exactly this method on a bare goroutine, where the middleware's
+// recoverPanic is not watching.
+func TestImportArticlesForSubscribersRecoversPanic(t *testing.T) {
+	connector := &recordingConnector{}
+	out := &lockedBuffer{}
+
+	fetchCfg := FetchConfig{AllowPrivateNetworks: true}
+	fetchCfg.setDefaults()
+
+	s := &FeedService{
+		models:   data.NewModels(sql.OpenDB(connector)),
+		logger:   jsonlog.New(out, jsonlog.LevelInfo),
+		fetchCfg: fetchCfg,
+		// client is left nil, so the fetch below panics: the stand-in for any
+		// panic raised deeper in the parsing and scraping code.
+	}
+
+	feed := &data.Feed{ID: 9, Url: "https://example.com/feed.xml"}
+	err := s.ImportArticlesForSubscribers(context.Background(), feed)
+	if err == nil {
+		t.Fatal("a panic during the import must return as an error, not unwind the goroutine")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("err = %v, want it to carry the panic", err)
+	}
+	if !connector.ran("consecutive_failures") {
+		t.Errorf("the feed was not marked failed; queries run: %v", connector.queries)
+	}
+	if logged := out.String(); !strings.Contains(logged, "panic") {
+		t.Errorf("the panic was not logged, got: %s", logged)
 	}
 }
