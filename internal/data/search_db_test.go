@@ -128,6 +128,29 @@ func TestSearchMatchesAPrefix(t *testing.T) {
 	t.Error("a prefix of the title did not match the article")
 }
 
+// A query ending with a negated hyphenated word renders as
+// 'chat' & !( 'foo-bar' <-> ... ), and appending ':*' to that closing
+// parenthesis is a tsquery syntax error — the search must not 500.
+func TestSearchWithTrailingNegatedHyphenatedWord(t *testing.T) {
+	db := testDB(t)
+	m := LinkModel{DB: db}
+
+	userID := seedUser(t, db)
+	articleID := seedArticle(t, db, articleFixture{title: "A chat about compilers"})
+	slug := seedLink(t, db, userID, articleID, linkFixture{})
+
+	results, _, err := m.Search(context.Background(), userID, SearchFilters{Query: "chat -foo-bar"}, 10, 0)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, r := range results {
+		if r.Slug == slug {
+			return
+		}
+	}
+	t.Error("the seeded link is missing from the results of a query with a trailing negated hyphenated word")
+}
+
 func TestSearchFiltersAndSince(t *testing.T) {
 	db := testDB(t)
 	m := LinkModel{DB: db}

@@ -20,8 +20,17 @@ func TestTsqueryExpr(t *testing.T) {
 	if !strings.Contains(expr, "':*'") {
 		t.Errorf("expr must append the prefix marker, got %q", expr)
 	}
-	if strings.Count(expr, "$2") != 2 {
-		t.Errorf("expr must reference $2 in both branches, got %q", expr)
+	// The prefix marker is appended only when the rendered query ends with a
+	// lexeme; a trailing negated hyphenated word renders with a closing
+	// parenthesis, where '):*' would be a syntax error.
+	if !strings.Contains(expr, "right(") {
+		t.Errorf("expr must guard the prefix marker on the trailing character, got %q", expr)
+	}
+	if !strings.Contains(expr, "ELSE ") {
+		t.Errorf("expr must cast the text as-is when it does not end with a lexeme, got %q", expr)
+	}
+	if strings.Count(expr, "$2") != 4 {
+		t.Errorf("expr must reference $2 in every branch, got %q", expr)
 	}
 	if !strings.Contains(expr, "'french_ua'") {
 		t.Errorf("expr must use the given config, got %q", expr)
@@ -83,8 +92,8 @@ func TestSearchQueryExpr(t *testing.T) {
 		if strings.Contains(expr, "COALESCE") {
 			t.Errorf("no OR needed when both halves are the same config, got %q", expr)
 		}
-		if strings.Count(expr, SimpleTextSearchConfig) != 2 {
-			t.Errorf("expr should reference the neutral config twice, got %q", expr)
+		if strings.Count(expr, SimpleTextSearchConfig) != 4 {
+			t.Errorf("expr should reference the neutral config once per CASE branch, got %q", expr)
 		}
 	})
 
