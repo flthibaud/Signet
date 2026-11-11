@@ -3,10 +3,20 @@ package data
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrDuplicateSubscription reports that the user is already subscribed to the
+// feed. It comes from the unique constraint, not from a prior read, so it also
+// catches the two concurrent subscribes that both pass an up-front check.
+var ErrDuplicateSubscription = errors.New("duplicate subscription")
+
+// subscriptionPairConstraint is the unique index backing "one subscription
+// per user per feed".
+const subscriptionPairConstraint = "subscriptions_user_id_feed_id_key"
 
 // Subscription ties one user to one feed and carries what that user changed
 // about it: an overridden title or icon, and the folder it is filed under.
@@ -31,24 +41,6 @@ type Subscription struct {
 // SubscriptionModel gives access to the subscriptions table.
 type SubscriptionModel struct {
 	DB *sql.DB
-}
-
-// Exists reports whether the user is already subscribed to the feed. The
-// subscribe path checks it up front so an existing subscription is reported as
-// such instead of breaching the unique constraint.
-func (m SubscriptionModel) Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error) {
-	query := `
-		SELECT EXISTS (
-			SELECT 1 FROM subscriptions
-			WHERE user_id = $1 AND feed_id = $2
-		)`
-	var exists bool
-	err := m.DB.QueryRowContext(ctx, query, userID, feedID).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-
-	return exists, nil
 }
 
 // GetAllForUser returns the user's subscriptions with their feed, their folder
@@ -199,8 +191,11 @@ func (m SubscriptionModel) SetFolder(ctx context.Context, userID uuid.UUID, id i
 }
 
 // Insert creates the subscription and sets its generated ID and CreatedAt.
-// Callers reach it through service.SubscriptionService, which owns the wider
-// sequence — resolving the feed, and removing it again if this write fails.
+// It returns ErrDuplicateSubscription when the user is already subscribed to
+// the feed: the unique constraint is what makes that answer race-safe, since
+// two concurrent inserts cannot both win. Callers reach Insert through
+// service.SubscriptionService, which owns the wider sequence — resolving the
+// feed, and removing it again if this write fails.
 func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscription) error {
 	query := `
 		INSERT INTO subscriptions (user_id, feed_id, custom_title, custom_icon, folder_id, created_at)
@@ -218,6 +213,9 @@ func (m SubscriptionModel) Insert(ctx context.Context, subscription *Subscriptio
 	).Scan(&subscription.ID, &subscription.CreatedAt)
 
 	if err != nil {
+		if isUniqueViolation(err, subscriptionPairConstraint) {
+			return ErrDuplicateSubscription
+		}
 		return err
 	}
 
