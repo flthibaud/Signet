@@ -36,7 +36,7 @@ go vet ./...                              # must be clean
 cd frontend && pnpm typecheck             # react-router typegen + tsc
 ```
 
-CI additionally runs `staticcheck`, `govulncheck`, `go test -race`, and checks that `go mod tidy` leaves no diff. Running `go vet` and the tests locally catches almost everything.
+CI additionally runs `staticcheck`, `govulncheck`, `go test -race` (against a Postgres service, so the `internal/data` tests really run there), and checks that `gofmt -l .` and `go mod tidy` leave nothing to change. Running `go vet` and the tests locally catches almost everything.
 
 ### Database-backed tests
 
