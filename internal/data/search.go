@@ -80,16 +80,20 @@ type SearchFilters struct {
 // lexeme into a prefix match, so search-as-you-type finds "postgres" while the
 // user is still typing "postg". websearch_to_tsquery renders as a quoted lexeme
 // list ('foo' & 'bar'), so appending the marker only ever affects the trailing
-// term. A query made solely of stopwords renders as the empty string, which is
-// not a valid tsquery; it collapses to NULL instead, and NULL never matches.
+// term — unless the query ends with a negated hyphenated word, which renders
+// with a closing parenthesis ('chat' & !( 'foo-bar' <-> ... )), where '):*' is
+// a syntax error. The marker is therefore appended only when the rendered text
+// ends with a lexeme, i.e. a closing quote. A query made solely of stopwords
+// renders as the empty string, which is not a valid tsquery; it collapses to
+// NULL instead, and NULL never matches.
 // config is interpolated into the query text rather than bound, so it is run
 // through safeTextSearchConfig here — at the point of interpolation — instead of
 // being trusted from the caller.
 func tsqueryExpr(n int, config string) string {
 	parsed := fmt.Sprintf("websearch_to_tsquery('%s', $%d)", safeTextSearchConfig(config), n)
 	return fmt.Sprintf(
-		"(CASE WHEN %s::text = '' THEN NULL::tsquery ELSE (%s::text || ':*')::tsquery END)",
-		parsed, parsed,
+		"(CASE WHEN %s::text = '' THEN NULL::tsquery WHEN right(%s::text, 1) = '''' THEN (%s::text || ':*')::tsquery ELSE %s::text::tsquery END)",
+		parsed, parsed, parsed, parsed,
 	)
 }
 
