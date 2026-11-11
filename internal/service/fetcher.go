@@ -271,6 +271,11 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 	if err != nil || parsed.Title() == "" {
 		title = item.Title
 		originalHTML = item.Content
+		// Plain RSS 2.0 fills only Description (<content:encoded> lands in
+		// Content), so a description-only item would otherwise be stored empty.
+		if originalHTML == "" {
+			originalHTML = item.Description
+		}
 		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
 	} else {
 		title = parsed.Title()

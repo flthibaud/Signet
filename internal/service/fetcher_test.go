@@ -16,6 +16,7 @@ import (
 
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/jsonlog"
+	"github.com/mmcdole/gofeed"
 )
 
 func TestReadFeedBody(t *testing.T) {
@@ -262,5 +263,41 @@ func TestImportArticlesForSubscribersRecoversPanic(t *testing.T) {
 	}
 	if logged := out.String(); !strings.Contains(logged, "panic") {
 		t.Errorf("the panic was not logged, got: %s", logged)
+	}
+}
+
+// A feed item that carries only <description> (Content stays empty in plain
+// RSS 2.0) must still get a body when the article page cannot be scraped —
+// otherwise the article is stored empty and never fetched again.
+func TestCreateArticleFromItemFallsBackToDescription(t *testing.T) {
+	// The article page is gone, so fetchWithReadability fails and the
+	// fallback to the feed item's own text runs.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	// recordingRows hands back one integer, which is all Articles.Insert scans.
+	db := sql.OpenDB(&recordingConnector{})
+	defer db.Close()
+
+	s := NewFeedService(data.NewModels(db), nil, FetchConfig{AllowPrivateNetworks: true})
+
+	item := &gofeed.Item{
+		Title:       "Protected post",
+		Link:        srv.URL + "/post",
+		Description: "<p>Full text from the feed</p>",
+		// Content deliberately left empty: only <content:encoded> fills it.
+	}
+
+	article, err := s.createArticleFromItem(context.Background(), item, srv.URL+"/post", "deadbeef", "simple_ua")
+	if err != nil {
+		t.Fatalf("createArticleFromItem: %v", err)
+	}
+	if article.OriginalHTML != "<p>Full text from the feed</p>" {
+		t.Errorf("OriginalHTML = %q, want the item description", article.OriginalHTML)
+	}
+	if !strings.Contains(article.TextContent, "Full text from the feed") {
+		t.Errorf("TextContent = %q, want the description converted to markdown", article.TextContent)
 	}
 }
