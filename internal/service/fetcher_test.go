@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/jsonlog"
@@ -299,5 +300,51 @@ func TestCreateArticleFromItemFallsBackToDescription(t *testing.T) {
 	}
 	if !strings.Contains(article.TextContent, "Full text from the feed") {
 		t.Errorf("TextContent = %q, want the description converted to markdown", article.TextContent)
+	}
+}
+
+// PostgreSQL rejects NUL bytes and invalid UTF-8 in text columns. A feed item
+// carrying either (a JSON Feed title with \u0000 does) would fail the insert on
+// every sync — and since a failed item keeps the feed's ETag from advancing,
+// the whole feed would be re-downloaded and the article page re-scraped
+// forever. Every string must be cleaned before the insert.
+func TestCreateArticleFromItemCleansUnstorableStrings(t *testing.T) {
+	// The article page is gone, so the fallback to the feed item's own text runs.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	db := sql.OpenDB(&recordingConnector{})
+	defer db.Close()
+
+	s := NewFeedService(data.NewModels(db), nil, FetchConfig{AllowPrivateNetworks: true})
+
+	item := &gofeed.Item{
+		Title:       "bad \x00 title \xff",
+		Link:        srv.URL + "/post",
+		Description: "<p>body \x00 with \xff</p>",
+		Author:      &gofeed.Person{Name: "au\x00thor"},
+	}
+
+	article, err := s.createArticleFromItem(context.Background(), item, srv.URL+"/post", "deadbeef", "simple_ua")
+	if err != nil {
+		t.Fatalf("createArticleFromItem: %v", err)
+	}
+	if article.Title != "bad  title " {
+		t.Errorf("Title = %q, want the NUL byte and the invalid byte stripped", article.Title)
+	}
+	for field, value := range map[string]string{
+		"Description":  article.Description,
+		"Author":       article.Author,
+		"OriginalHTML": article.OriginalHTML,
+		"TextContent":  article.TextContent,
+	} {
+		if strings.ContainsRune(value, 0) {
+			t.Errorf("%s = %q, still contains a NUL byte", field, value)
+		}
+		if !utf8.ValidString(value) {
+			t.Errorf("%s = %q, still contains invalid UTF-8", field, value)
+		}
 	}
 }

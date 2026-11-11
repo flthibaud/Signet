@@ -269,17 +269,17 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 	// detects them on the response itself and returns an error, so an empty
 	// title here just means readability found nothing usable.
 	if err != nil || parsed.Title() == "" {
-		title = item.Title
-		originalHTML = item.Content
+		title = cleanArticleString(item.Title)
+		originalHTML = cleanArticleString(item.Content)
 		// Plain RSS 2.0 fills only Description (<content:encoded> lands in
 		// Content), so a description-only item would otherwise be stored empty.
 		if originalHTML == "" {
-			originalHTML = item.Description
+			originalHTML = cleanArticleString(item.Description)
 		}
 		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
 	} else {
-		title = parsed.Title()
-		originalHTML = renderToValidUTF8(parsed.RenderHTML)
+		title = cleanArticleString(parsed.Title())
+		originalHTML = cleanArticleString(renderToValidUTF8(parsed.RenderHTML))
 		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
 	}
 
@@ -287,13 +287,13 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		Url:          link,
 		Hash:         hash,
 		Title:        title,
-		Description:  plainText(item.Description),
-		Author:       getAuthor(item),
+		Description:  cleanArticleString(plainText(item.Description)),
+		Author:       cleanArticleString(getAuthor(item)),
 		ImageURL:     getItemImageURL(item),
 		PageType:     "article",
 		ReadingTime:  estimateReadingTime(textContent),
 		OriginalHTML: originalHTML,
-		TextContent:  textContent,
+		TextContent:  cleanArticleString(textContent),
 		Language:     language,
 		PublishedAt:  getPublishedDate(item),
 	}
@@ -656,6 +656,16 @@ func getPublishedDate(item *gofeed.Item) time.Time {
 		return *item.PublishedParsed
 	}
 	return time.Now()
+}
+
+// cleanArticleString strips what PostgreSQL's text columns reject: invalid
+// UTF-8 bytes and NUL characters (a NUL is valid UTF-8, so ToValidUTF8 alone
+// lets it through). A feed item carrying either — a JSON Feed title with \u0000
+// is one — would fail the insert on every sync, and since a failed item keeps
+// the feed's ETag from advancing, the whole feed would be re-downloaded and
+// the article page re-scraped forever.
+func cleanArticleString(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, ""), "\x00", "")
 }
 
 func renderToValidUTF8(render func(w io.Writer) error) string {
