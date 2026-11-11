@@ -129,6 +129,31 @@ func TestTransportBlocksDirectLoopbackDial(t *testing.T) {
 	}
 }
 
+// Cloning http.DefaultTransport keeps ProxyFromEnvironment, so with
+// HTTP_PROXY set the dialer would connect to the proxy and the guard would vet
+// the proxy's address instead of the target's. The transport must dial the
+// target directly: the proxy here is a public, unroutable TEST-NET-1 address
+// the guard allows, so a proxied request would fail with a dial error, while a
+// direct one is rejected by the guard before any connection is made.
+func TestTransportDialsTargetNotProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://192.0.2.1:3128")
+	t.Setenv("HTTPS_PROXY", "http://192.0.2.1:3128")
+	t.Setenv("NO_PROXY", "")
+
+	client := &http.Client{Transport: NewGuard(false).Transport(2 * time.Second)}
+
+	_, err := client.Get("http://169.254.169.254/latest/meta-data/")
+	if err == nil {
+		t.Fatal("request to the metadata endpoint succeeded, want blocked")
+	}
+	if !errors.Is(err, ErrBlocked) {
+		t.Fatalf("error %v does not wrap ErrBlocked — the dial went to the proxy, not the target", err)
+	}
+	if !strings.Contains(err.Error(), "169.254.169.254") {
+		t.Fatalf("error %v does not name the blocked target", err)
+	}
+}
+
 // The bypass a URL validator cannot catch: an allowed host answering 302 to a
 // blocked one. The first hop must succeed and the second must be refused, which
 // is only true because Control runs per-connection rather than on the submitted

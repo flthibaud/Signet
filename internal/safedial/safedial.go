@@ -151,6 +151,12 @@ func (g *Guard) Dialer(timeout time.Duration) *net.Dialer {
 // installed on its dialer.
 func (g *Guard) Transport(timeout time.Duration) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
+	// The clone keeps ProxyFromEnvironment, so with HTTP(S)_PROXY set the
+	// dialer would connect to the proxy and Control would vet the proxy's IP
+	// instead of the target's — a feed URL pointing at 169.254.169.254 would
+	// then be fetched by the proxy unchecked. Outbound proxies are not
+	// supported: every fetch is a direct dial the guard sees.
+	t.Proxy = nil
 	t.DialContext = g.Dialer(timeout).DialContext
 	return t
 }
