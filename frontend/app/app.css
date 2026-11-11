@@ -62,6 +62,11 @@ body {
   margin: 0;
   padding: 0;
   font-family: var(--font-inter);
+  background-color: var(--color-n-1);
+  color: var(--color-n-7);
+}
+
+[data-theme="dark"] body {
   background-color: var(--color-n-7);
   color: var(--color-n-1);
 }
