@@ -37,16 +37,22 @@ func (app *application) serve() error {
 			"signal": s.String(),
 		})
 
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		// Stop the HTTP server first: Shutdown waits for in-flight requests but
+		// refuses new ones, so no handler can start a background import on a
+		// context that is already being torn down (wg.Go after wg.Wait, a failed
+		// fetch counted against a healthy feed) while the workers drain below.
+		err := srv.Shutdown(ctx)
+
 		app.scheduler.Stop()
 
 		app.services.SubscriptionService.Shutdown()
 
 		app.services.OPMLService.Shutdown()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		shutdownError <- srv.Shutdown(ctx)
+		shutdownError <- err
 	}()
 
 	// Start the server as normal
