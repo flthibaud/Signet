@@ -17,8 +17,10 @@ var removalRules = []func(*html.Node) bool{
 	hasIDRule("div", "js-modal-gifted-url"),        // Le Monde gifted modal
 	hasIDRule("section", "js-capping"),             // Le Monde paywall cap
 	hasIDRule("section", "js-capping-old-article"), // Le Monde paywall cap (old)
+	// Promo/overlay widgets are bare <div tabindex="-1"> with no id; a div that
+	// has one is a skip-link target (e.g. <div id="content">) wrapping real content.
 	func(n *html.Node) bool {
-		return hasAttr(n, "tabindex") && getAttr(n, "tabindex") == "-1"
+		return n.Data == "div" && getAttr(n, "tabindex") == "-1" && !hasAttr(n, "id")
 	},
 	func(n *html.Node) bool {
 		return n.Data == "div" && isRelatedContentWidget(n)
