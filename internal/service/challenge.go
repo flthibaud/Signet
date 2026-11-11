@@ -52,7 +52,11 @@ const challengeMinText = 300
 // including on a 200, which is how Cloudflare serves some interstitials.
 var scriptMarkers = map[challengeSignal][]string{
 	challengeCloudflare: {
-		"/cdn-cgi/challenge-platform/",
+		// _cf_chl_opt is the options object of a real interstitial. The
+		// /cdn-cgi/challenge-platform/ path must not be a marker: Cloudflare
+		// also injects it into ordinary 200 pages through its passive jsd
+		// script, and matching it would condemn every article on the site.
+		"_cf_chl_opt",
 		"__cf_chl",
 		"cf-browser-verification",
 		"challenges.cloudflare.com/turnstile",
