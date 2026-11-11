@@ -116,10 +116,11 @@ The `make migrate-*` targets are for local schema work only; deployments do not 
 
 ### Before every push
 
-Run what CI runs (`.github/workflows/ci.yml`). CI has no database, so the `internal/data` tests skip there — run them locally against a real one.
+Run what CI runs (`.github/workflows/ci.yml`). CI runs the `internal/data` tests against a Postgres service; locally they **skip** without a reachable database, so point `DATABASE_URL` at one and run `go run ./cmd/api --migrate-only` first (the tests do not migrate).
 
 ```bash
 (cd frontend && pnpm typecheck && pnpm build)
+test -z "$(gofmt -l .)"
 go mod tidy && git diff --exit-code -- go.mod go.sum
 go build ./... && go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@latest ./...
