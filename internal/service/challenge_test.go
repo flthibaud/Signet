@@ -49,11 +49,23 @@ func TestDetectChallenge(t *testing.T) {
 			want:   challengeCloudflare,
 		},
 		{
-			name:   "cloudflare challenge script on a 200",
+			name:   "cloudflare interstitial on a 200",
 			status: 200,
 			header: http.Header{"Server": {"cloudflare"}},
-			body:   `<html><head><script src="/cdn-cgi/challenge-platform/h/b/scripts/jsd/main.js"></script></head><body></body></html>`,
-			want:   challengeCloudflare,
+			body: `<html><head><title>Just a moment...</title>` +
+				`<script>window._cf_chl_opt={cvId:"abc",ct:"1"};</script></head><body></body></html>`,
+			want: challengeCloudflare,
+		},
+		{
+			// Cloudflare also injects /cdn-cgi/challenge-platform/ into
+			// ordinary 200 pages via its passive jsd script (a korben.info
+			// article carries it deep in the body), so that path is not a
+			// marker and the article must not read as a challenge.
+			name:   "large article carrying the passive jsd script",
+			status: 200,
+			header: http.Header{"Server": {"cloudflare"}},
+			body:   article + `<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>`,
+			want:   challengeNone,
 		},
 		{
 			name:   "datadome block",

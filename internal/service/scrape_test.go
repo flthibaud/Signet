@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -144,7 +145,10 @@ func TestFetchPageEscalatesToSolver(t *testing.T) {
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		solverCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok","solution":{"url":"https://example.com/a","status":200,"response":"<html><body>rendered</body></html>"}}`))
+		// Enough real text to clear the empty-page heuristic, so this is a
+		// solved article and not another challenge.
+		body := strconv.Quote(string(okPage("rendered").Body))
+		w.Write([]byte(`{"status":"ok","solution":{"url":"https://example.com/a","status":200,"response":` + body + `}}`))
 	}))
 	defer sidecar.Close()
 
@@ -167,11 +171,78 @@ func TestFetchPageEscalatesToSolver(t *testing.T) {
 	}
 }
 
+func TestFetchPageSolverArticleWithJsdScriptIsThePage(t *testing.T) {
+	// Cloudflare injects its passive jsd script into ordinary 200 pages (a
+	// korben.info article carries it at ~121 KB, inside the scan window), so a
+	// sidecar answer that is a real article must come back as the page, not as
+	// errChallenge.
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body := "<html><head><title>Un article</title></head><body>" +
+			strings.Repeat("<p>du contenu editorial bien reel.</p>", 4000) +
+			`<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>` +
+			"</body></html>"
+		w.Write([]byte(`{"status":"ok","solution":{"url":"https://example.com/a","status":200,"response":` + strconv.Quote(body) + `}}`))
+	}))
+	defer sidecar.Close()
+
+	scrape := &fakeFetcher{id: "tls", resp: challengePage()}
+	s := newTestService(scrape, scrape, FetchConfig{})
+	s.solver = newSolverClient(sidecar.URL, 5*time.Second, nil)
+
+	page, err := s.fetchPage(context.Background(), mustURL(t, "https://example.com/a"))
+	if err != nil {
+		t.Fatalf("fetchPage: %v, want the solved article as the page", err)
+	}
+	if page.Via != "browser" {
+		t.Errorf("Via = %q, want browser", page.Via)
+	}
+	if !strings.Contains(string(page.Body), "jsd/main.js") {
+		t.Error("body = sidecar answer, want the article carrying the jsd script")
+	}
+}
+
+func TestFetchPageSolverBlockPageIsAnError(t *testing.T) {
+	// The browser can land on the block page too — a harder challenge, or a
+	// 403 "Access denied" — and that HTML must not reach readability as the
+	// article, so the sidecar's answer goes through the same checks as the
+	// other clients.
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"blocked status", 403, "<html><head><title>Access denied</title></head></html>"},
+		{"interstitial on a 200", 200, `<html><head><script src="/cdn-cgi/challenge-platform/h/b/turnstile/v1"></script><title>Just a moment...</title></head></html>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(`{"status":"ok","solution":{"status":` + strconv.Itoa(tc.status) + `,"response":` + strconv.Quote(tc.body) + `}}`))
+			}))
+			defer sidecar.Close()
+
+			scrape := &fakeFetcher{id: "tls", resp: challengePage()}
+			s := newTestService(scrape, scrape, FetchConfig{})
+			s.solver = newSolverClient(sidecar.URL, 5*time.Second, nil)
+
+			page, err := s.fetchPage(context.Background(), mustURL(t, "https://example.com/a"))
+			if !errors.Is(err, errChallenge) {
+				t.Fatalf("err = %v, want errChallenge", err)
+			}
+			if page != nil {
+				t.Errorf("page = %v, want nil", page)
+			}
+		})
+	}
+}
+
 func TestFetchPageRespectsSolveBudget(t *testing.T) {
 	var solverCalls atomic.Int32
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		solverCalls.Add(1)
-		w.Write([]byte(`{"status":"ok","solution":{"status":200,"response":"<html><body>rendered</body></html>"}}`))
+		body := strconv.Quote(string(okPage("rendered").Body))
+		w.Write([]byte(`{"status":"ok","solution":{"status":200,"response":` + body + `}}`))
 	}))
 	defer sidecar.Close()
 

@@ -120,6 +120,9 @@ func (s *FeedService) fetchPage(ctx context.Context, u *url.URL) (*pageResponse,
 	// sidecar can't deliver we still try the normal path below.
 	if s.solver != nil && s.hostNeedsBrowser(u.Host) && s.solver.available() && takeSolve(ctx) {
 		if page, err := s.solver.fetch(ctx, u); err == nil {
+			if !isSolvedPage(page) {
+				return nil, errChallenge
+			}
 			return page, nil
 		} else if ctx.Err() != nil {
 			return nil, err
@@ -185,9 +188,21 @@ func (s *FeedService) fetchPage(ctx context.Context, u *url.URL) (*pageResponse,
 		s.logFetch("browser sidecar could not solve challenge", u, string(signal), err)
 		return nil, errChallenge
 	}
+	if !isSolvedPage(solved) {
+		s.logFetch("browser sidecar still served the challenge page", u, string(signal), nil)
+		return nil, errChallenge
+	}
 
 	s.logFetch("challenge solved via browser sidecar", u, string(signal), nil)
 	return solved, nil
+}
+
+// isSolvedPage reports whether a sidecar answer is the article rather than
+// another block page. The browser can end on the interstitial too — a harder
+// challenge, or a 403 "Access denied" — and that HTML must not go to
+// readability and be stored as the article.
+func isSolvedPage(page *pageResponse) bool {
+	return page.StatusCode >= 200 && page.StatusCode < 300 && detectChallenge(page) == challengeNone
 }
 
 // logFetch records the interesting scrape events — escalations, fallbacks,
