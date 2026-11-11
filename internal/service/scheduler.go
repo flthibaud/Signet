@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 	"sync"
@@ -230,23 +229,9 @@ type feedSyncJob struct {
 }
 
 func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
-	defer func() {
-		if r := recover(); r != nil {
-			s.logger.PrintError(fmt.Errorf("panic processing feed %d: %v", job.feed.ID, r), map[string]string{
-				"feed_id": strconv.FormatInt(job.feed.ID, 10),
-				"url":     job.feed.Url,
-			})
-
-			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			if _, err := s.services.models.Feeds.MarkFeedFailed(markCtx, job.feed.ID); err != nil {
-				s.logger.PrintError(err, map[string]string{
-					"context": "marking feed failed after panic",
-					"feed_id": strconv.FormatInt(job.feed.ID, 10),
-				})
-			}
-		}
-	}()
+	// A panic inside the import is recovered by ImportArticlesForSubscribers
+	// itself, which turns it into an error and marks the feed failed, so both
+	// this path and the post-subscribe import are covered from one place.
 
 	domain := extractDomain(job.feed.Url)
 	limiter := s.getOrCreateLimiter(domain)

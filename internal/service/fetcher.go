@@ -303,7 +303,26 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 
 // ImportArticlesForSubscribers fetches a feed with conditional HTTP headers
 // and distributes new articles to all subscribers via bulk insert.
-func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) error {
+//
+// It runs on goroutines the HTTP middleware's recoverPanic cannot see (the
+// scheduler's workers and the post-subscribe import), so a panic anywhere
+// below — the readability parser chewing on arbitrary third-party HTML is the
+// known case — is recovered here, logged, recorded as a feed failure, and
+// returned as an error instead of taking the whole process down.
+func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicErr := fmt.Errorf("panic importing feed %d: %v", feed.ID, r)
+			s.logger.PrintError(panicErr, map[string]string{
+				"feed_id": strconv.FormatInt(feed.ID, 10),
+				"url":     feed.Url,
+			})
+			// markFailed detaches from ctx, so the failure is still recorded
+			// even when the panic unwound through an expired context.
+			err = s.markFailed(ctx, feed.ID, panicErr)
+		}
+	}()
+
 	// Bound the whole feed processing below the lock window so we always release
 	// the feed before another worker can reclaim the (stale) lock.
 	ctx, cancel := context.WithTimeout(ctx, feedProcessTimeout)
