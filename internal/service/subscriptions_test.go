@@ -54,15 +54,9 @@ func (f *fakeFeedStore) MarkDueForSync(ctx context.Context, ids []int64) error {
 }
 
 type fakeSubscriptionStore struct {
-	exists    bool
-	existsErr error
 	insertErr error
 
 	inserted []*data.Subscription
-}
-
-func (f *fakeSubscriptionStore) Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error) {
-	return f.exists, f.existsErr
 }
 
 func (f *fakeSubscriptionStore) Insert(ctx context.Context, sub *data.Subscription) error {
@@ -282,11 +276,14 @@ func TestSubscribeDeferredImport(t *testing.T) {
 	}
 }
 
+// The loser of two concurrent subscribes is decided by the unique constraint,
+// not by a prior lookup: Insert fails with data.ErrDuplicateSubscription and
+// Subscribe reports it as ErrAlreadySubscribed.
 func TestSubscribeWhenAlreadySubscribed(t *testing.T) {
 	existing := &data.Feed{ID: 7}
 
 	feeds := &fakeFeedStore{feed: existing}
-	subs := &fakeSubscriptionStore{exists: true}
+	subs := &fakeSubscriptionStore{insertErr: data.ErrDuplicateSubscription}
 	importer := &fakeFeedImporter{}
 
 	svc := newTestSubscriptionService(feeds, subs, importer)

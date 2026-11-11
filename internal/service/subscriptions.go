@@ -13,7 +13,7 @@ import (
 )
 
 // ErrAlreadySubscribed reports that the user is already subscribed to the feed.
-// Handlers turn it into a 409 rather than silently creating a second row.
+// Handlers turn it into a 422 rather than silently creating a second row.
 var ErrAlreadySubscribed = errors.New("already subscribed to this feed")
 
 type feedStore interface {
@@ -23,7 +23,6 @@ type feedStore interface {
 }
 
 type subscriptionStore interface {
-	Exists(ctx context.Context, userID uuid.UUID, feedID int64) (bool, error)
 	Insert(ctx context.Context, sub *data.Subscription) error
 }
 
@@ -114,14 +113,6 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 		}
 	}
 
-	exists, err := s.subs.Exists(ctx, userID, feed.ID)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, ErrAlreadySubscribed
-	}
-
 	subscription := &data.Subscription{
 		UserID:   userID,
 		FeedID:   feed.ID,
@@ -129,6 +120,12 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 	}
 
 	if err := s.subs.Insert(ctx, subscription); err != nil {
+		// The unique constraint is the only race-safe "already subscribed"
+		// check: two concurrent subscribes both pass any up-front lookup, but
+		// only one insert can win.
+		if errors.Is(err, data.ErrDuplicateSubscription) {
+			return nil, ErrAlreadySubscribed
+		}
 		return nil, err
 	}
 	subscribed = true
