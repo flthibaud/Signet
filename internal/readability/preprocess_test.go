@@ -51,6 +51,11 @@ var preprocessCases = []preprocessCase{
 		contain: []string{"Contenu visible."},
 		exclude: []string{"Navigation cachée"},
 	},
+	{
+		name:    "conserve le contenu réel portant tabindex=-1 (titres GitHub, <main>, cible de skip link)",
+		input:   `<h2 tabindex="-1">Install</h2><p>Run the thing.</p><main tabindex="-1"><p>Main body text here.</p></main><div id="content" tabindex="-1"><p>Wrapped body.</p></div>`,
+		contain: []string{"Install", "Run the thing.", "Main body text here.", "Wrapped body."},
+	},
 
 	// -------------------------------------------------------------------------
 	// General — blocs RGPD / tracking
