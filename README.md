@@ -109,6 +109,8 @@ Every variable has a sane default: only `DATABASE_URL` is required. The binary r
 | `SOLVER_TIMEOUT` | `60s` | Budget for one browser solve |
 | `SOLVER_MAX_PER_FEED` | `5` | Cap on solves per feed run |
 
+Outbound proxies are **not supported**: feed and article fetches ignore `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` and always dial the target directly. The SSRF guard can only vet the address the dialer actually connects to — with a proxy in the path it would check the proxy's IP instead of the target's, and a feed URL like `http://169.254.169.254/…` would be fetched by the proxy unchecked. (`TRUSTED_PROXY_COUNT` is about the *inbound* path — the reverse proxy in front of the app, see below.)
+
 The rate limiter is **disabled by default**: a self-hoster serving a handful of trusted users does not need it. It only applies to `/v1/*`. Sign-in (`POST /v1/tokens/authentication`) and sign-up (`POST /v1/users`) are the exception and are always limited, with the same `RATE_LIMITER_RPS` / `RATE_LIMITER_BURST`: each request costs a bcrypt round, so leaving them open would allow unthrottled password guessing and an easy way to saturate the CPU.
 
 Registration is **closed by default**, so an instance you put on the internet does not hand out accounts to whoever finds it. Sign-ups stay open while the database holds no user, which is what lets you create your own account on a fresh install — after that the door shuts on its own. Set `REGISTRATION_ENABLED=true` to open it to other people.
