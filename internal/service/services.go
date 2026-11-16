@@ -15,9 +15,9 @@
 // always uses the stdlib one, scraping climbs the ladder. Both dial through
 // internal/safedial, because both fetch URLs a user supplied.
 //
-// Services that start background work (SubscriptionService, OPMLService) hold a
-// context of their own rather than a request's, since the work outlives the
-// response, and each exposes a Shutdown to cancel it.
+// Background work (the Scheduler, OPMLService) holds a context of its own rather
+// than a request's, since the work outlives the response; each exposes a way to
+// cancel it (Stop, Shutdown).
 package service
 
 import (
@@ -26,32 +26,30 @@ import (
 )
 
 // Services aggregates the business logic layer, the way data.Models aggregates
-// the data layer: main builds one and hands it to the handlers and the
-// scheduler.
+// the data layer: main builds one and hands it to the handlers.
 type Services struct {
 	FeedService         *FeedService
 	SubscriptionService *SubscriptionService
 	OPMLService         *OPMLService
-
-	// models is kept for the housekeeping the scheduler does outside any one
-	// service — pruning expired tokens, for instance.
-	models data.Models
+	Scheduler           *Scheduler
 }
 
-// NewServices builds every service, injecting the models, the logger and the
-// fetch configuration.
-func NewServices(models data.Models, logger *jsonlog.Logger, fetchCfg FetchConfig) Services {
-	// The order is a dependency chain, not a preference: SubscriptionService
-	// needs FeedService to create a feed and import its articles, and
-	// OPMLService subscribes through SubscriptionService.
+// NewServices builds every service and the scheduler, injecting the models, the
+// logger and their configuration. The scheduler is built but not started.
+func NewServices(models data.Models, logger *jsonlog.Logger, fetchCfg FetchConfig, schedCfg SchedulerConfig) Services {
+	// The order is a dependency chain, not a preference: the scheduler syncs
+	// through FeedService, SubscriptionService creates feeds with FeedService and
+	// wakes the scheduler, and OPMLService subscribes through
+	// SubscriptionService.
 	feedService := NewFeedService(models, logger, fetchCfg)
-	subscriptionService := NewSubscriptionService(models, feedService, logger)
+	scheduler := NewScheduler(feedService, models, logger, schedCfg)
+	subscriptionService := NewSubscriptionService(models, feedService, scheduler, logger)
 	opmlService := NewOPMLService(models, subscriptionService, logger)
 
 	return Services{
 		FeedService:         feedService,
 		SubscriptionService: subscriptionService,
 		OPMLService:         opmlService,
-		models:              models,
+		Scheduler:           scheduler,
 	}
 }

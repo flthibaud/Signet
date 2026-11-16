@@ -22,7 +22,6 @@ import (
 type fakeSubscriber struct {
 	mu       sync.Mutex
 	byURL    map[string]error
-	feedIDs  map[string]int64
 	calls    []string
 	lastOpts SubscribeOptions
 }
@@ -38,7 +37,7 @@ func (f *fakeSubscriber) Subscribe(ctx context.Context, userID uuid.UUID, feedUR
 		return nil, err
 	}
 
-	return &data.Subscription{FeedID: f.feedIDs[feedURL], FolderID: opts.FolderID}, nil
+	return &data.Subscription{FolderID: opts.FolderID}, nil
 }
 
 type fakeFolderStore struct {
@@ -133,37 +132,13 @@ func (f *fakeImportStore) counts() (imported, skipped, failed int) {
 	return
 }
 
-type fakeFeedMarker struct {
-	mu     sync.Mutex
-	marked []int64
-}
-
-func (f *fakeFeedMarker) MarkDueForSync(ctx context.Context, ids []int64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.marked = append(f.marked, ids...)
-	return nil
-}
-
-type fakeSyncTrigger struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (f *fakeSyncTrigger) TriggerSync() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls++
-}
-
-func newTestOPMLService(subs subscriber, folders folderStore, imports importStore, feeds feedMarker) *OPMLService {
+func newTestOPMLService(subs subscriber, folders folderStore, imports importStore) *OPMLService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &OPMLService{
 		subs:    subs,
 		folders: folders,
 		imports: imports,
-		feeds:   feeds,
 		logger:  jsonlog.New(&lockedBuffer{}, jsonlog.LevelInfo),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -190,15 +165,11 @@ func TestImportMixedOutcomes(t *testing.T) {
 			"https://example.test/index.html": ErrInvalidFeed,
 			"https://broken.test/rss":         errors.New("database exploded"),
 		},
-		feedIDs: map[string]int64{"https://korben.info/feed": 42},
 	}
 	folders := &fakeFolderStore{}
 	imports := newFakeImportStore()
-	feeds := &fakeFeedMarker{}
-	trigger := &fakeSyncTrigger{}
 
-	svc := newTestOPMLService(subs, folders, imports, feeds)
-	svc.SetSyncTrigger(trigger)
+	svc := newTestOPMLService(subs, folders, imports)
 
 	imp, err := svc.StartImport(context.Background(), uuid.New(), entries)
 	if err != nil {
@@ -231,46 +202,15 @@ func TestImportMixedOutcomes(t *testing.T) {
 	if len(folders.created) != 1 || folders.created[0] != "Tech" {
 		t.Errorf("folders created: %v, want one \"Tech\"", folders.created)
 	}
-
-	// Only feeds that actually got subscribed are handed to the scheduler.
-	if len(feeds.marked) != 1 || feeds.marked[0] != 42 {
-		t.Errorf("marked %v due for sync, want [42]", feeds.marked)
-	}
-	if trigger.calls != 1 {
-		t.Errorf("TriggerSync calls = %d, want 1", trigger.calls)
-	}
-}
-
-// The per-feed import must stay off: it is the whole reason the scheduler is
-// nudged once at the end instead.
-func TestImportDefersArticleImports(t *testing.T) {
-	subs := &fakeSubscriber{feedIDs: map[string]int64{"https://korben.info/feed": 1}}
-
-	imports := newFakeImportStore()
-
-	svc := newTestOPMLService(subs, &fakeFolderStore{}, imports, &fakeFeedMarker{})
-
-	_, err := svc.StartImport(context.Background(), uuid.New(), []opml.Entry{
-		{XMLURL: "https://korben.info/feed"},
-	})
-	if err != nil {
-		t.Fatalf("StartImport: %v", err)
-	}
-	imports.wait(t)
-	svc.Shutdown()
-
-	if !subs.lastOpts.DeferImport {
-		t.Error("entries must be subscribed with DeferImport set")
-	}
 }
 
 // A folder that cannot be created costs the feed its filing, not its import.
 func TestImportSurvivesFolderFailure(t *testing.T) {
-	subs := &fakeSubscriber{feedIDs: map[string]int64{"https://korben.info/feed": 1}}
+	subs := &fakeSubscriber{}
 	folders := &fakeFolderStore{err: errors.New("folders table is on fire")}
 	imports := newFakeImportStore()
 
-	svc := newTestOPMLService(subs, folders, imports, &fakeFeedMarker{})
+	svc := newTestOPMLService(subs, folders, imports)
 
 	_, err := svc.StartImport(context.Background(), uuid.New(), []opml.Entry{
 		{XMLURL: "https://korben.info/feed", Folder: "Tech"},
@@ -290,29 +230,6 @@ func TestImportSurvivesFolderFailure(t *testing.T) {
 	}
 }
 
-// Nothing to sync means nothing to wake the scheduler for.
-func TestImportWithoutSuccessDoesNotTrigger(t *testing.T) {
-	subs := &fakeSubscriber{byURL: map[string]error{"https://dead.test/rss": ErrFeedNotFound}}
-	trigger := &fakeSyncTrigger{}
-
-	imports := newFakeImportStore()
-
-	svc := newTestOPMLService(subs, &fakeFolderStore{}, imports, &fakeFeedMarker{})
-	svc.SetSyncTrigger(trigger)
-
-	if _, err := svc.StartImport(context.Background(), uuid.New(), []opml.Entry{
-		{XMLURL: "https://dead.test/rss"},
-	}); err != nil {
-		t.Fatalf("StartImport: %v", err)
-	}
-	imports.wait(t)
-	svc.Shutdown()
-
-	if trigger.calls != 0 {
-		t.Errorf("TriggerSync calls = %d, want none", trigger.calls)
-	}
-}
-
 // Shutdown in the middle of an import must close the job as interrupted and
 // stay quiet about it: cancelling on purpose is not a failure, and logging it
 // at ERROR would put one stack trace per worker in the logs on every restart.
@@ -321,7 +238,7 @@ func TestImportInterruptedByShutdown(t *testing.T) {
 	subs := &blockingSubscriber{started: make(chan struct{}, 1), release: release}
 	imports := newFakeImportStore()
 
-	svc := newTestOPMLService(subs, &fakeFolderStore{}, imports, &fakeFeedMarker{})
+	svc := newTestOPMLService(subs, &fakeFolderStore{}, imports)
 	logged := &lockedBuffer{}
 	svc.logger = jsonlog.New(logged, jsonlog.LevelInfo)
 
@@ -380,7 +297,7 @@ func TestStartImportPropagatesInsertFailure(t *testing.T) {
 	insertErr := errors.New("database down")
 	imports := &fakeImportStore{insertErr: insertErr}
 
-	svc := newTestOPMLService(&fakeSubscriber{}, &fakeFolderStore{}, imports, &fakeFeedMarker{})
+	svc := newTestOPMLService(&fakeSubscriber{}, &fakeFolderStore{}, imports)
 
 	if _, err := svc.StartImport(context.Background(), uuid.New(), []opml.Entry{{XMLURL: "https://a.test/feed"}}); !errors.Is(err, insertErr) {
 		t.Fatalf("got %v, want %v", err, insertErr)

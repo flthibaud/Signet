@@ -555,16 +555,19 @@ User                API                    FeedService              DB
  │                   │ INSERT subscription      │                    │
  │                   │─────────────────────────────────────────────>│
  │                   │                          │                    │
- │                   │ go ImportArticles()      │  (async)           │
- │                   │─────────────────────────>│                    │
+ │                   │ MarkDueForSync           │                    │
+ │                   │─────────────────────────────────────────────>│
+ │                   │ Scheduler.TriggerSync()  │  (le pool importe) │
  │                   │                          │                    │
  │  202 Accepted     │                          │                    │
  │<──────────────────│                          │                    │
 ```
 
-### 2. Import des articles (async)
+### 2. Import des articles (par le scheduler)
 
-Pour chaque `<item>` du flux RSS :
+L'abonnement n'importe rien lui-même : il rend le flux dû et réveille le
+scheduler, dont un worker réserve le flux (claim) et le synchronise. Pour chaque
+`<item>` du flux RSS :
 
 ```go
 // 1. Résoudre le lien de l'item (fallback <guid> permalien) puis le hasher
@@ -629,31 +632,33 @@ POST /v1/opml/import
   ├── OPMLImports.Insert    remplace l'import précédent → 202
   └── goroutine détachée
         ├── Folders.GetOrCreate   une fois par nom distinct, séquentiellement
-        ├── 4 workers → SubscriptionService.Subscribe(..., DeferImport: true)
+        ├── 4 workers → SubscriptionService.Subscribe
+        │     ├── MarkDueForSync + TriggerSync, comme tout abonnement
         │     └── AppendResult    compteurs + ligne de rapport, un seul UPDATE
-        ├── Feeds.MarkDueForSync  sur les flux souscrits
-        ├── Scheduler.TriggerSync réveille le pool de sync
         └── MarkFinished          completed | interrupted
 ```
 
 ### Les deux pièges de l'import en masse
 
-**La ruée des imports d'articles.** `Subscribe` lance normalement l'import des
-articles du flux en tâche de fond. Sur 200 lignes d'OPML, ce sont 200 goroutines
-qui fetchent et scrapent des flux entiers en même temps. D'où
-`SubscribeOptions.DeferImport` : l'import OPML marque les flux comme dus puis
-réveille le scheduler **une fois**, et c'est son pool de workers — avec son rate
-limiting par domaine — qui fait le travail. Le tick ainsi réveillé enchaîne les
-lots de `batchSize` flux jusqu'à avoir traité tous les flux dus.
+**La ruée des imports d'articles.** Si chaque `Subscribe` importait lui-même
+les articles du flux, 200 lignes d'OPML feraient 200 goroutines qui fetchent et
+scrapent des flux entiers en même temps. `Subscribe` se contente donc de marquer
+le flux dû et de réveiller le scheduler ; c'est son pool de workers — avec son
+rate limiting par domaine — qui fait le travail. Les réveils se fusionnent (canal
+de taille 1), et le passage ainsi déclenché enchaîne les lots de `batchSize`
+flux, ce qui ramasse au fil de l'eau les flux que l'import ajoute pendant ce
+temps.
 
 **Le 304 qui vide la bibliothèque.** S'abonner à un flux que l'instance connaît
 déjà envoie un `If-None-Match` avec l'ETag stocké. Le serveur répond `304`,
 `ImportArticlesForSubscribers` retourne avant la boucle qui crée les `links`, et
 le nouvel abonné n'a **aucun article** — jusqu'à ce que l'éditeur publie. D'où
 `Feeds.MarkDueForSync`, qui remet `last_fetched_at` à l'époque et vide
-`http_etag` / `http_last_modified` pour forcer un `200`. Elle est appelée aussi
-bien par l'import OPML que par `Subscribe` sur un flux préexistant, ce qui
-corrige le même trou sur le chemin unitaire.
+`http_etag` / `http_last_modified` pour forcer un `200`. `Subscribe` l'appelle
+pour chaque nouvel abonnement, formulaire comme OPML. Si une synchro du flux
+tourne déjà, `MarkDueForSync` efface aussi son claim, et `ReleaseFeed` /
+`MarkFeedFailed` refusent alors d'écrire : la synchro en cours a lu la liste des
+abonnés avant le nouveau, son ETag ne doit pas écraser la remise à zéro.
 
 ### Reprise après crash
 

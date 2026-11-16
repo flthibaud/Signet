@@ -69,7 +69,8 @@ Le scheduler orchestre la synchronisation périodique.
 
 ```go
 type Scheduler struct {
-    services  *Services
+    feedSvc   *FeedService     // Exécute la synchro d'un feed
+    models    data.Models      // Claim des feeds dus + ménage horaire
     logger    *jsonlog.Logger
     interval  time.Duration    // Intervalle entre chaque tick (ex: 15min)
     workers   int              // Nombre de workers concurrents (ex: 5)
@@ -79,6 +80,8 @@ type Scheduler struct {
 ```
 
 **Cycle de vie :** Lancer le Ticker -> Fetcher les feeds -> Distribuer au Worker Pool -> Attendre la complétion ou le signal `quit` (Graceful Shutdown).
+
+**Seul le scheduler synchronise.** Un nouvel abonnement (formulaire ou import OPML) n'importe rien lui-même : `Subscribe` appelle `Feeds.MarkDueForSync` puis `Scheduler.TriggerSync`, et c'est le prochain passage du pool qui ramène les articles. Toute synchro passe ainsi par un claim (`GetFeedsToSync`) ; un import lancé depuis l'abonnement tournait sans claim, en parallèle d'un worker qui pouvait synchroniser le même feed. `NewServices` construit le scheduler avant `SubscriptionService` pour pouvoir le lui passer.
 
 #### 3. Query `GetFeedsToSync` (`internal/data/feeds.go`)
 
@@ -102,6 +105,7 @@ RETURNING id, url, http_etag, http_last_modified;
 
 **Notes :**
 - `last_fetched_at` n'est **pas** mis à jour ici, mais à la fin de la tentative, qu'elle réussisse (`ReleaseFeed`) ou échoue (`MarkFeedFailed`) : c'est la date de la dernière tentative. Sans l'écriture en cas d'échec, `syncFeeds`, qui enchaîne les lots, reprendrait aussitôt un feed qui vient d'échouer.
+- `ReleaseFeed` et `MarkFeedFailed` n'écrivent que si le claim tient encore (`fetching_since IS NOT NULL`). `MarkDueForSync` l'efface quand quelqu'un s'abonne pendant une synchro : celle-ci a lu la liste des abonnés avant lui, et écrire son ETag par-dessus la remise à zéro ferait du passage suivant un `304`, laissant le nouvel abonné sans articles.
 - `$2` est la fenêtre de lock (`data.SyncLockWindow`, 10 min, constante) : `fetching_since` remplace le booléen `is_fetching`, donc si un worker crash le lock expire automatiquement et le feed redevient éligible au prochain tick. Elle doit rester au-dessus de `feedProcessTimeout` (8 min).
 - `$4` est `deadFeedRetryInterval` (24 h) : un feed désactivé reste éligible une fois par jour, compté depuis sa dernière tentative (`MarkFeedFailed` écrit `last_fetched_at` à chaque échec).
 - `$3` est l'intervalle de rafraîchissement, dérivé de `SCHEDULER_INTERVAL` — c'est le même paramètre qui pilote le ticker, sinon régler `SCHEDULER_INTERVAL` n'aurait aucun effet sur la fréquence réelle. On applique une marge de 10 % (`syncIntervalSlack`) parce que `last_fetched_at` est écrit à la *fin* du sync, quelques secondes après le tick qui l'a lancé : sans cette marge, un feed raterait systématiquement le tick suivant et ne serait rafraîchi qu'un tick sur deux.

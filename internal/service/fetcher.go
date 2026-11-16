@@ -309,8 +309,8 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 // ImportArticlesForSubscribers fetches a feed with conditional HTTP headers
 // and distributes new articles to all subscribers via bulk insert.
 //
-// It runs on goroutines the HTTP middleware's recoverPanic cannot see (the
-// scheduler's workers and the post-subscribe import), so a panic anywhere
+// It runs on the scheduler's workers, which the HTTP middleware's recoverPanic
+// cannot see, and only on a feed the caller has claimed. So a panic anywhere
 // below — the readability parser chewing on arbitrary third-party HTML is the
 // known case — is recovered here, logged, recorded as a feed failure, and
 // returned as an error instead of taking the whole process down.

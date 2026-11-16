@@ -21,7 +21,8 @@ import (
 // Create it with NewScheduler, run it with Start, and always pair Start with
 // Stop — the workers hold a context the scheduler owns.
 type Scheduler struct {
-	services       *Services
+	feedSvc        *FeedService
+	models         data.Models
 	logger         *jsonlog.Logger
 	interval       time.Duration
 	workers        int
@@ -46,21 +47,36 @@ const tokenCleanupInterval = time.Hour
 // before it is presumed dead.
 const staleImportAge = 30 * time.Minute
 
+// SchedulerConfig sizes the scheduler: how often feeds are refreshed, how many
+// sync at once, and how many are claimed per batch.
+type SchedulerConfig struct {
+	Interval  time.Duration
+	Workers   int
+	BatchSize int
+}
+
+// cancelledByShutdown reports whether err is the cancellation of ctx, i.e. the
+// work was cut short on purpose rather than failing.
+func cancelledByShutdown(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, context.Canceled)
+}
+
 // NewScheduler builds a scheduler without starting it. A non-positive interval
 // is replaced by DefaultSyncInterval rather than rejected, since the alternative
 // is a ticker that panics at Start.
-func NewScheduler(services *Services, logger *jsonlog.Logger, interval time.Duration, workers, batchSize int) *Scheduler {
-	if interval <= 0 {
-		interval = DefaultSyncInterval
+func NewScheduler(feedSvc *FeedService, models data.Models, logger *jsonlog.Logger, cfg SchedulerConfig) *Scheduler {
+	if cfg.Interval <= 0 {
+		cfg.Interval = DefaultSyncInterval
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		services:  services,
+		feedSvc:   feedSvc,
+		models:    models,
 		logger:    logger,
-		interval:  interval,
-		workers:   workers,
-		batchSize: batchSize,
+		interval:  cfg.Interval,
+		workers:   cfg.Workers,
+		batchSize: cfg.BatchSize,
 		quit:      make(chan struct{}),
 		wake:      make(chan struct{}, 1),
 		ctx:       ctx,
@@ -137,7 +153,7 @@ func (s *Scheduler) logBackgroundError(err error, component string) {
 }
 
 func (s *Scheduler) failStaleImports() {
-	interrupted, err := s.services.models.OPMLImports.FailStale(s.ctx, staleImportAge)
+	interrupted, err := s.models.OPMLImports.FailStale(s.ctx, staleImportAge)
 	if err != nil {
 		s.logBackgroundError(err, "opml_import_cleanup")
 		return
@@ -151,7 +167,7 @@ func (s *Scheduler) failStaleImports() {
 }
 
 func (s *Scheduler) purgeExpiredTokens() {
-	deleted, err := s.services.models.Tokens.DeleteExpired(s.ctx)
+	deleted, err := s.models.Tokens.DeleteExpired(s.ctx)
 	if err != nil {
 		s.logBackgroundError(err, "token_cleanup")
 		return
@@ -187,7 +203,7 @@ func (s *Scheduler) syncFeeds() {
 	ctx := s.ctx
 
 	for ctx.Err() == nil {
-		feeds, err := s.services.FeedService.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
+		feeds, err := s.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
 		if err != nil {
 			s.logBackgroundError(err, "scheduler")
 			return
@@ -230,8 +246,7 @@ type feedSyncJob struct {
 
 func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 	// A panic inside the import is recovered by ImportArticlesForSubscribers
-	// itself, which turns it into an error and marks the feed failed, so both
-	// this path and the post-subscribe import are covered from one place.
+	// itself, which turns it into an error and marks the feed failed.
 
 	domain := extractDomain(job.feed.Url)
 	limiter := s.getOrCreateLimiter(domain)
@@ -239,7 +254,7 @@ func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
 		return
 	}
 
-	err := s.services.FeedService.ImportArticlesForSubscribers(ctx, job.feed)
+	err := s.feedSvc.ImportArticlesForSubscribers(ctx, job.feed)
 	if err != nil {
 		if cancelledByShutdown(ctx, err) {
 			s.logger.PrintInfo("feed sync cancelled at shutdown", map[string]string{
