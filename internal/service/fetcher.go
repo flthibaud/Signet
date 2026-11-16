@@ -38,11 +38,6 @@ var (
 // browsers from the same deployment.
 const UserAgent = browserUserAgent
 
-// feedProcessTimeout bounds how long a single feed sync may run. It must stay
-// below data.SyncLockWindow so we always release the feed before another worker
-// considers the lock stale and reclaims it.
-const feedProcessTimeout = 8 * time.Minute
-
 // scrapeTimeout bounds a single article fetch, whichever transport handles it.
 const scrapeTimeout = 30 * time.Second
 
@@ -74,7 +69,10 @@ func readFeedBody(r io.Reader) ([]byte, error) {
 // handlers and the scheduler's workers, so its fields must stay safe for
 // concurrent use.
 type FeedService struct {
-	models      data.Models
+	feeds       syncFeedStore
+	articles    articleStore
+	links       linkStore
+	subscribers subscriberStore
 	client      *http.Client
 	parser      *gofeed.Parser
 	readability *readabilitymd.Readability
@@ -130,7 +128,10 @@ func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig)
 	}
 
 	s := &FeedService{
-		models:       models,
+		feeds:        models.Feeds,
+		articles:     models.Articles,
+		links:        models.Links,
+		subscribers:  models.Subscriptions,
 		client:       client,
 		parser:       gofeed.NewParser(),
 		readability:  readabilitymd.NewReadability(),
@@ -208,7 +209,7 @@ func (s *FeedService) CreateFromURL(ctx context.Context, feedURL string) (*data.
 	}
 
 	// 4. Store it.
-	err = s.models.Feeds.Insert(ctx, feed)
+	err = s.feeds.Insert(ctx, feed)
 	if err != nil {
 		return nil, err
 	}
@@ -298,205 +299,12 @@ func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.It
 		PublishedAt:  getPublishedDate(item),
 	}
 
-	err = s.models.Articles.Insert(ctx, article)
+	err = s.articles.Insert(ctx, article)
 	if err != nil {
 		return nil, err
 	}
 
 	return article, nil
-}
-
-// ImportArticlesForSubscribers fetches a feed with conditional HTTP headers
-// and distributes new articles to all subscribers via bulk insert.
-//
-// It runs on the scheduler's workers, which the HTTP middleware's recoverPanic
-// cannot see, and only on a feed the caller has claimed. So a panic anywhere
-// below — the readability parser chewing on arbitrary third-party HTML is the
-// known case — is recovered here, logged, recorded as a feed failure, and
-// returned as an error instead of taking the whole process down.
-func (s *FeedService) ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			panicErr := fmt.Errorf("panic importing feed %d: %v", feed.ID, r)
-			s.logger.PrintError(panicErr, map[string]string{
-				"feed_id": strconv.FormatInt(feed.ID, 10),
-				"url":     feed.Url,
-			})
-			// markFailed detaches from ctx, so the failure is still recorded
-			// even when the panic unwound through an expired context.
-			err = s.markFailed(ctx, feed.ID, panicErr)
-		}
-	}()
-
-	// Bound the whole feed processing below the lock window so we always release
-	// the feed before another worker can reclaim the (stale) lock.
-	ctx, cancel := context.WithTimeout(ctx, feedProcessTimeout)
-	defer cancel()
-
-	// Cap browser solves for this run: each one can take a minute, and letting
-	// them eat the whole feedProcessTimeout would starve the remaining items and
-	// stop the ETag from advancing, making the next tick redo everything.
-	ctx = withSolveBudget(ctx, s.fetchCfg.SolverMaxPerFeed)
-
-	// 1. Build HTTP request with conditional headers
-	req, err := http.NewRequestWithContext(ctx, "GET", feed.Url, nil)
-	if err != nil {
-		return s.markFailed(ctx, feed.ID, err)
-	}
-	req.Header.Set("User-Agent", UserAgent)
-	if feed.HttpEtag != "" {
-		req.Header.Set("If-None-Match", feed.HttpEtag)
-	}
-	if feed.HttpLastModified != "" {
-		req.Header.Set("If-Modified-Since", feed.HttpLastModified)
-	}
-
-	// 2. Execute request
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return s.markFailed(ctx, feed.ID, err)
-	}
-	defer resp.Body.Close()
-
-	// 3. Handle 304 Not Modified
-	if resp.StatusCode == http.StatusNotModified {
-		return s.models.Feeds.ReleaseFeed(ctx, feed.ID, feed.HttpEtag, feed.HttpLastModified)
-	}
-
-	// 4. Handle error status codes
-	if resp.StatusCode != http.StatusOK {
-		return s.markFailed(ctx, feed.ID, fmt.Errorf("feed %d returned status %d", feed.ID, resp.StatusCode))
-	}
-
-	// 5. Parse feed
-	raw, err := readFeedBody(resp.Body)
-	if err != nil {
-		return s.markFailed(ctx, feed.ID, fmt.Errorf("feed %d: %w", feed.ID, err))
-	}
-
-	parsedFeed, err := s.parser.Parse(bytes.NewReader(raw))
-	if err != nil {
-		return s.markFailed(ctx, feed.ID, err)
-	}
-
-	// 6. Get HTTP caching headers from response. If the server omits one, keep
-	// the previous value rather than clearing it, so we don't lose conditional
-	// fetching on the next tick.
-	newEtag := resp.Header.Get("ETag")
-	if newEtag == "" {
-		newEtag = feed.HttpEtag
-	}
-	newLastModified := resp.Header.Get("Last-Modified")
-	if newLastModified == "" {
-		newLastModified = feed.HttpLastModified
-	}
-
-	// 7. Get all subscriber IDs
-	subscriberIDs, err := s.models.Subscriptions.GetSubscriberIDs(ctx, feed.ID)
-	if err != nil {
-		return s.markFailed(ctx, feed.ID, err)
-	}
-
-	// 8. Process each item. If any item fails, we must NOT persist the new
-	// ETag/Last-Modified, otherwise the next fetch gets a 304 and the items we
-	// missed are never retried.
-	// The language the feed declares (<language>, xml:lang) is the most reliable
-	// signal available: the overwhelming majority of feeds carry it, and
-	// guessing from the text would be less certain. Absent, this resolves to the
-	// neutral configuration.
-	feedLanguage := data.ResolveTextSearchConfig(parsedFeed.Language)
-
-	itemsFailed := false
-	for _, item := range parsedFeed.Items {
-		// Stop if we've hit the processing deadline (or the app is shutting
-		// down): the remaining items will be retried on the next tick.
-		if ctx.Err() != nil {
-			itemsFailed = true
-			break
-		}
-
-		link := itemURL(item.Link, item.GUID)
-		if link == "" {
-			continue
-		}
-
-		hash := hashURL(link)
-
-		// Check if article already exists
-		article, err := s.models.Articles.GetByHash(ctx, hash)
-		if err != nil && err != data.ErrRecordNotFound {
-			itemsFailed = true
-			continue
-		}
-
-		// Create article if new
-		if article == nil {
-			article, err = s.createArticleFromItem(ctx, item, link, hash, feedLanguage)
-			if err != nil {
-				itemsFailed = true
-				continue
-			}
-		}
-
-		// Bulk insert links for all subscribers
-		if len(subscriberIDs) > 0 {
-			baseSlug := slugFromHash(hash)
-			if err := s.models.Links.BulkInsertForArticle(ctx, subscriberIDs, article.ID, feed.ID, baseSlug); err != nil {
-				itemsFailed = true
-			}
-		}
-	}
-
-	// 9. Release feed. Only advance the caching headers when every item
-	// succeeded; on partial failure we keep the previous headers so the feed is
-	// fully re-fetched (no 304) next time.
-	//
-	// Use a context detached from cancellation: when we break out of the loop on
-	// a hit deadline, ctx is already done and the release (which clears the lock)
-	// must still run.
-	releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancelRelease()
-
-	if itemsFailed {
-		return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, feed.HttpEtag, feed.HttpLastModified)
-	}
-	return s.models.Feeds.ReleaseFeed(releaseCtx, feed.ID, newEtag, newLastModified)
-}
-
-// feedFailureThreshold is how many consecutive failures turn a feed off.
-const feedFailureThreshold = 10
-
-// FeedFetchError wraps a sync failure with the number of consecutive failures
-// the feed has now accumulated, so the caller can log how close it is to being
-// deactivated without reading the row back.
-type FeedFetchError struct {
-	Failures int
-	Err      error
-}
-
-// Error returns the underlying cause's message; the failure count is metadata
-// for the caller, not part of what a user is shown.
-func (e *FeedFetchError) Error() string { return e.Err.Error() }
-
-// Unwrap exposes the cause, so errors.Is and errors.As see through the wrapper.
-func (e *FeedFetchError) Unwrap() error { return e.Err }
-
-// markFailed records a feed failure (clearing the lock, incrementing the
-// counter, deactivating after the threshold) and returns an error mentioning
-// the deactivation so the caller logs it. The DB write uses a detached context
-// so it still runs if the processing deadline has already fired.
-func (s *FeedService) markFailed(ctx context.Context, feedID int64, cause error) error {
-	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-
-	failures, err := s.models.Feeds.MarkFeedFailed(dbCtx, feedID)
-	if err != nil {
-		return errors.Join(cause, fmt.Errorf("marking feed %d failed: %w", feedID, err))
-	}
-	if failures >= feedFailureThreshold {
-		return fmt.Errorf("feed %d deactivated after %d consecutive failures: %w", feedID, failures, cause)
-	}
-	return &FeedFetchError{Failures: failures, Err: cause}
 }
 
 // estimateReadingTime returns an estimated reading time in minutes from the

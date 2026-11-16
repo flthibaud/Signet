@@ -46,7 +46,7 @@ func TestFeedDeactivationIsNotPermanent(t *testing.T) {
 	before := readFeedState(t, db, id)
 
 	claimFeed(t, db, id)
-	if _, err := m.MarkFeedFailed(ctx, id); err != nil {
+	if _, err := m.MarkFeedFailed(ctx, id, 10); err != nil {
 		t.Fatal(err)
 	}
 	// Without the stamp, a scheduler pass draining due feeds would claim the
@@ -57,7 +57,7 @@ func TestFeedDeactivationIsNotPermanent(t *testing.T) {
 
 	for range 8 {
 		claimFeed(t, db, id)
-		if _, err := m.MarkFeedFailed(ctx, id); err != nil {
+		if _, err := m.MarkFeedFailed(ctx, id, 10); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -67,7 +67,7 @@ func TestFeedDeactivationIsNotPermanent(t *testing.T) {
 	}
 
 	claimFeed(t, db, id)
-	if _, err := m.MarkFeedFailed(ctx, id); err != nil {
+	if _, err := m.MarkFeedFailed(ctx, id, 10); err != nil {
 		t.Fatal(err)
 	}
 	if s = readFeedState(t, db, id); s.active {
@@ -105,7 +105,7 @@ func TestSubscribeMidSyncKeepsFeedDue(t *testing.T) {
 	}{
 		{"release", func(id int64) error { return m.ReleaseFeed(ctx, id, `"new-etag"`, "") }},
 		{"failure", func(id int64) error {
-			failures, err := m.MarkFeedFailed(ctx, id)
+			failures, err := m.MarkFeedFailed(ctx, id, 10)
 			if err == nil && failures != 0 {
 				t.Errorf("failures = %d, want 0 for a feed whose claim was reset", failures)
 			}
@@ -138,5 +138,105 @@ func TestSubscribeMidSyncKeepsFeedDue(t *testing.T) {
 					etag, lastFetched, failures)
 			}
 		})
+	}
+}
+
+func TestMarkFeedFailedUsesTheGivenThreshold(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	m := FeedModel{DB: db}
+
+	id := seedFeed(t, db, "Test feed", "")
+	for i := range 2 {
+		claimFeed(t, db, id)
+		failures, err := m.MarkFeedFailed(ctx, id, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failures != i+1 {
+			t.Fatalf("failures = %d, want %d", failures, i+1)
+		}
+	}
+	if s := readFeedState(t, db, id); s.active {
+		t.Error("the feed should be deactivated once it reaches the threshold it was given")
+	}
+}
+
+// A sync the shutdown cut short gives its claim back and nothing else: the feed
+// did nothing wrong, and must be claimable again at once.
+func TestUnclaimOnlyReleasesTheClaim(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	m := FeedModel{DB: db}
+
+	id := seedFeed(t, db, "Test feed", "")
+	exec(t, db, `UPDATE feeds SET consecutive_failures = 3, last_fetched_at = to_timestamp(0) WHERE id = $1`, id)
+	claimFeed(t, db, id)
+
+	if err := m.Unclaim(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	var claimed bool
+	if err := db.QueryRowContext(ctx, `SELECT fetching_since IS NOT NULL FROM feeds WHERE id = $1`, id).Scan(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	s := readFeedState(t, db, id)
+	if claimed || s.failures != 3 || !s.lastFetchedAt.Equal(time.Unix(0, 0)) {
+		t.Errorf("claimed=%v failures=%d last_fetched_at=%v, want only the claim cleared", claimed, s.failures, s.lastFetchedAt)
+	}
+}
+
+// The windows are a century long and the fixtures backdated before 1970, so the
+// claim cannot touch rows this test does not own, even on a development
+// database: the oldest real timestamp is MarkDueForSync's epoch.
+func TestGetFeedsToSyncClaimsOnlyDueFeeds(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	m := FeedModel{DB: db}
+
+	const year = 365 * 24 * time.Hour
+	dueAfter, lockWindow, deadRetry := 100*year, 10*time.Minute, 150*year
+
+	userID := seedUser(t, db)
+	feed := func(lastFetched, fetchingSince string, active, subscribed bool) int64 {
+		id := seedFeed(t, db, "Test feed", "")
+		exec(t, db, `UPDATE feeds SET last_fetched_at = `+lastFetched+`, fetching_since = `+fetchingSince+`,
+			is_active = $2, http_etag = 'etag' WHERE id = $1`, id, active)
+		if subscribed {
+			seedSubscription(t, db, userID, id, nil)
+		}
+		return id
+	}
+
+	const old, older = "'1900-01-01'", "'1800-01-01'"
+	due := feed(old, "NULL", true, true)
+	feed("to_timestamp(0)", "NULL", true, true) // fetched within the window
+	feed(old, "NOW()", true, true)              // claimed by a live sync
+	staleClaim := feed(old, "NOW() - interval '1 hour'", true, true)
+	feed(old, "NULL", false, true)              // deactivated, retried too recently
+	deadOld := feed(older, "NULL", false, true) // deactivated, due a retry
+	feed(old, "NULL", true, false)              // nobody subscribed
+
+	claimed, err := m.GetFeedsToSync(ctx, 1000, dueAfter, lockWindow, deadRetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[int64]bool{}
+	for _, f := range claimed {
+		got[f.ID] = true
+		if f.ID == due && f.HttpEtag != "etag" {
+			t.Errorf("claimed feed etag = %q, want the stored one for the conditional fetch", f.HttpEtag)
+		}
+	}
+	want := map[int64]bool{due: true, staleClaim: true, deadOld: true}
+	for id := range want {
+		if !got[id] {
+			t.Errorf("feed %d was not claimed", id)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("claimed %v, want exactly %v", got, want)
 	}
 }

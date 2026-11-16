@@ -4,7 +4,7 @@
 
 Deux types de fetch cohabitent, avec des besoins opposés :
 
-- **Polling RSS** (`ImportArticlesForSubscribers`) : fetche les *flux* toutes les
+- **Polling RSS** (`SyncFeed`) : fetche les *flux* toutes les
   15 min, tous les feeds, avec ETag/If-Modified-Since. Fréquent, rarement bloqué
   → doit rester rock-solid sur le client **stdlib**. On n'y touche pas.
 - **Scraping d'article** (`fetchWithReadability`) : extrait le contenu de la page.
@@ -318,7 +318,7 @@ Si vous activez le profil `solver`, l'isolation réseau est donc la mesure qui c
 
 ## Flux complet
 
-1. Scheduler → `ImportArticlesForSubscribers()` : polling du flux en **stdlib**,
+1. Scheduler → `SyncFeed()` : polling du flux en **stdlib**,
    et ouverture d'un budget de solves pour le run.
 2. Pour chaque nouvel item → `fetchWithReadability(url)` → rate-limit par domaine
    → `fetchPage()`.
