@@ -169,3 +169,17 @@ A three-stage `Dockerfile` (pnpm build → `go build` with those assets copied i
 - `develop` is the integration branch; `master` is the release branch. CI publishes the `dev` image from `develop` and `latest` from `master`, so cutting a release is a `develop` → `master` merge followed by a tag.
 - Branch off an up-to-date `develop` as `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `test/<slug>` or `docs/<slug>`. PRs target **`develop`, never `master`**. Run the [pre-push checks](#before-every-push) first.
 - Conventional commits in English, imperative, no scope: `fix: stop refetching the sidebar on every reading progress save`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on flthibaud/Signet (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, created as needed. See `docs/agents/domain.md`.
