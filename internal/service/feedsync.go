@@ -68,6 +68,10 @@ type SyncResult struct {
 	Status      SyncStatus
 	NewArticles int
 	FailedItems int
+	// UnstorableItems are items the database refused for their content
+	// (data.ErrUnstorable). Retrying would get the same refusal, so unlike
+	// FailedItems they do not hold the caching headers back.
+	UnstorableItems int
 	// Failures is the feed's consecutive failure count after a SyncFailed or
 	// SyncDeactivated.
 	Failures int
@@ -218,8 +222,13 @@ func (s *FeedService) SyncFeed(ctx context.Context, feed *data.Feed) (res SyncRe
 			if shutdown.Err() != nil {
 				return s.unclaim(feed)
 			}
-			res.FailedItems++
-			s.logItemFailure(feed, link, err)
+			unstorable := errors.Is(err, data.ErrUnstorable)
+			if unstorable {
+				res.UnstorableItems++
+			} else {
+				res.FailedItems++
+			}
+			s.logItemFailure(feed, link, err, unstorable)
 			continue
 		}
 		if created {
@@ -298,16 +307,18 @@ func (s *FeedService) unclaim(feed *data.Feed) SyncResult {
 	return SyncResult{Status: SyncCancelled, StoreErr: s.feeds.Unclaim(ctx, feed.ID)}
 }
 
-// logItemFailure makes a failed item visible: it holds the feed's ETag back, so
-// an item that fails every time costs a full re-download each sync, and this
-// line is the only trace of why.
-func (s *FeedService) logItemFailure(feed *data.Feed, link string, err error) {
+// logItemFailure makes a failed item visible. A transient failure holds the
+// feed's ETag back, so one that keeps recurring costs a full re-download each
+// sync; an unstorable item is skipped for good. This line is the only trace of
+// either.
+func (s *FeedService) logItemFailure(feed *data.Feed, link string, err error, unstorable bool) {
 	if s.logger == nil {
 		return
 	}
 	s.logger.PrintInfo("feed item failed", map[string]string{
-		"feed_id": strconv.FormatInt(feed.ID, 10),
-		"item":    link,
-		"reason":  err.Error(),
+		"feed_id":   strconv.FormatInt(feed.ID, 10),
+		"item":      link,
+		"reason":    err.Error(),
+		"permanent": strconv.FormatBool(unstorable),
 	})
 }

@@ -7,10 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	readability "codeberg.org/readeck/go-readability/v2"
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/mmcdole/gofeed"
 )
@@ -101,77 +103,138 @@ func TestCreateFromURLRejectsGzipBomb(t *testing.T) {
 	}
 }
 
-// A feed item that carries only <description> (Content stays empty in plain
-// RSS 2.0) must still get a body when the article page cannot be scraped —
-// otherwise the article is stored empty and never fetched again.
-func TestCreateArticleFromItemFallsBackToDescription(t *testing.T) {
-	// The article page is gone, so fetchWithReadability fails and the
-	// fallback to the feed item's own text runs.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	s, _ := newSyncTestService(t)
-
-	item := &gofeed.Item{
-		Title:       "Protected post",
-		Link:        srv.URL + "/post",
-		Description: "<p>Full text from the feed</p>",
-		// Content deliberately left empty: only <content:encoded> fills it.
-	}
-
-	article, err := s.createArticleFromItem(context.Background(), item, srv.URL+"/post", "deadbeef", "simple_ua")
+// extractPage runs readability over a fixed page, as fetchWithReadability would
+// over a fetched one.
+func extractPage(t *testing.T, page string) readability.Article {
+	t.Helper()
+	u, _ := url.Parse("https://example.test/post")
+	article, err := readability.FromReader(strings.NewReader(page), u)
 	if err != nil {
-		t.Fatalf("createArticleFromItem: %v", err)
+		t.Fatalf("readability: %v", err)
 	}
-	if article.OriginalHTML != "<p>Full text from the feed</p>" {
-		t.Errorf("OriginalHTML = %q, want the item description", article.OriginalHTML)
-	}
-	if !strings.Contains(article.TextContent, "Full text from the feed") {
-		t.Errorf("TextContent = %q, want the description converted to markdown", article.TextContent)
-	}
+	return article
 }
 
-// PostgreSQL rejects NUL bytes and invalid UTF-8 in text columns. A feed item
-// carrying either (a JSON Feed title with \u0000 does) would fail the insert on
-// every sync — and since a failed item keeps the feed's ETag from advancing,
-// the whole feed would be re-downloaded and the article page re-scraped
-// forever. Every string must be cleaned before the insert.
-func TestCreateArticleFromItemCleansUnstorableStrings(t *testing.T) {
-	// The article page is gone, so the fallback to the feed item's own text runs.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
+func TestBuildArticle(t *testing.T) {
+	body := strings.Repeat("Extracted body sentence. ", 40)
+	titled := extractPage(t, `<html><head><title>Page title</title></head><body><article><p>`+body+`</p></article></body></html>`)
+	untitled := extractPage(t, `<html><body><article><p>`+body+`</p></article></body></html>`)
+	gone := errors.New("status 404")
 
-	s, _ := newSyncTestService(t)
+	tests := []struct {
+		name     string
+		item     *gofeed.Item
+		page     readability.Article
+		fetchErr error
+		link     string
 
-	item := &gofeed.Item{
-		Title:       "bad \x00 title \xff",
-		Link:        srv.URL + "/post",
-		Description: "<p>body \x00 with \xff</p>",
-		Author:      &gofeed.Person{Name: "au\x00thor"},
+		wantTitle string
+		wantHTML  string // a substring of OriginalHTML
+		wantText  string // a substring of TextContent
+		wantURL   string
+		wantImage string
+	}{
+		{
+			// Plain RSS 2.0 fills only Description; without the fallback the
+			// article would be stored empty and never fetched again.
+			name:      "page gone, description-only item",
+			item:      &gofeed.Item{Title: "Item title", Description: "<p>Full text from the feed</p>"},
+			fetchErr:  gone,
+			wantTitle: "Item title",
+			wantHTML:  "<p>Full text from the feed</p>",
+			wantText:  "Full text from the feed",
+		},
+		{
+			name:      "page gone, item with content",
+			item:      &gofeed.Item{Title: "Item title", Content: "<p>Encoded content</p>", Description: "<p>Summary</p>"},
+			fetchErr:  gone,
+			wantTitle: "Item title",
+			wantHTML:  "<p>Encoded content</p>",
+			wantText:  "Encoded content",
+		},
+		{
+			name:      "page extracted",
+			item:      &gofeed.Item{Title: "Item title", Description: "<p>Summary</p>"},
+			page:      titled,
+			wantTitle: "Page title",
+			wantHTML:  "Extracted body sentence.",
+			wantText:  "Extracted body sentence.",
+		},
+		{
+			// The extracted body is the best one available whether or not the
+			// page has a <title>.
+			name:      "page extracted without a title",
+			item:      &gofeed.Item{Title: "Item title", Description: "<p>Summary</p>"},
+			page:      untitled,
+			wantTitle: "Item title",
+			wantHTML:  "Extracted body sentence.",
+			wantText:  "Extracted body sentence.",
+		},
+		{
+			// A frameset document has no <body>, which the Markdown converter
+			// rejects; the text must not be lost with it.
+			name:      "body the converter rejects",
+			item:      &gofeed.Item{Title: "Item title", Content: "<frameset></frameset><p>Kept text</p>"},
+			fetchErr:  gone,
+			wantTitle: "Item title",
+			wantText:  "Kept text",
+		},
+		{
+			// PostgreSQL rejects NUL bytes and invalid UTF-8 in text columns, so
+			// one left in any field would make the item unstorable for good.
+			name: "strings the database refuses",
+			item: &gofeed.Item{
+				Title:       "bad \x00 title \xff",
+				Description: "<p>body \x00 with \xff</p>",
+				Author:      &gofeed.Person{Name: "au\x00thor"},
+				Image:       &gofeed.Image{URL: "https://example.test/i\x00mg\xff.png"},
+			},
+			fetchErr:  gone,
+			link:      "https://example.test/po\x00st\xff",
+			wantTitle: "bad  title ",
+			wantURL:   "https://example.test/post",
+			wantImage: "https://example.test/img.png",
+		},
 	}
 
-	article, err := s.createArticleFromItem(context.Background(), item, srv.URL+"/post", "deadbeef", "simple_ua")
-	if err != nil {
-		t.Fatalf("createArticleFromItem: %v", err)
-	}
-	if article.Title != "bad  title " {
-		t.Errorf("Title = %q, want the NUL byte and the invalid byte stripped", article.Title)
-	}
-	for field, value := range map[string]string{
-		"Description":  article.Description,
-		"Author":       article.Author,
-		"OriginalHTML": article.OriginalHTML,
-		"TextContent":  article.TextContent,
-	} {
-		if strings.ContainsRune(value, 0) {
-			t.Errorf("%s = %q, still contains a NUL byte", field, value)
-		}
-		if !utf8.ValidString(value) {
-			t.Errorf("%s = %q, still contains invalid UTF-8", field, value)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			link := tt.link
+			if link == "" {
+				link = "https://example.test/post"
+			}
+
+			a := buildArticle(tt.item, tt.page, tt.fetchErr, link, "deadbeef", "simple_ua")
+
+			if a.Title != tt.wantTitle {
+				t.Errorf("Title = %q, want %q", a.Title, tt.wantTitle)
+			}
+			if !strings.Contains(a.OriginalHTML, tt.wantHTML) {
+				t.Errorf("OriginalHTML = %q, want it to contain %q", a.OriginalHTML, tt.wantHTML)
+			}
+			if !strings.Contains(a.TextContent, tt.wantText) {
+				t.Errorf("TextContent = %q, want it to contain %q", a.TextContent, tt.wantText)
+			}
+			if tt.wantURL != "" && a.Url != tt.wantURL {
+				t.Errorf("Url = %q, want %q", a.Url, tt.wantURL)
+			}
+			if tt.wantImage != "" && a.ImageURL != tt.wantImage {
+				t.Errorf("ImageURL = %q, want %q", a.ImageURL, tt.wantImage)
+			}
+
+			for field, value := range map[string]string{
+				"Url":          a.Url,
+				"Title":        a.Title,
+				"Description":  a.Description,
+				"Author":       a.Author,
+				"ImageURL":     a.ImageURL,
+				"OriginalHTML": a.OriginalHTML,
+				"TextContent":  a.TextContent,
+			} {
+				if strings.ContainsRune(value, 0) || !utf8.ValidString(value) {
+					t.Errorf("%s = %q, still holds a NUL byte or invalid UTF-8", field, value)
+				}
+			}
+		})
 	}
 }

@@ -243,7 +243,13 @@ func (m LinkModel) GetBySlug(ctx context.Context, slug string, userID uuid.UUID)
 }
 
 // BulkInsertForArticle creates links for multiple users in a single query.
-// Uses ON CONFLICT DO NOTHING to skip users who already have this article.
+//
+// The bare ON CONFLICT DO NOTHING covers both of the table's unique
+// constraints. On (user_id, article_id) it skips a user who already has the
+// article. On (user_id, slug) it skips a user holding another article whose
+// hash starts with the same 12 characters: that user goes without this one
+// article, which beats the whole statement failing, for every subscriber, on
+// every sync for as long as the item stays in the feed.
 //
 // The user ids travel as one array parameter rather than as a generated VALUES
 // list. A row per user would have cost four placeholders each, and Postgres caps
@@ -268,10 +274,10 @@ func (m LinkModel) BulkInsertForArticle(ctx context.Context, userIDs []uuid.UUID
 		INSERT INTO links (user_id, article_id, feed_id, slug, saved_at, updated_at)
 		SELECT u.id, $2, $3, $4, NOW(), NOW()
 		FROM unnest($1::uuid[]) AS u(id)
-		ON CONFLICT (user_id, article_id) DO NOTHING`
+		ON CONFLICT DO NOTHING`
 
 	_, err := m.DB.ExecContext(ctx, query, pq.Array(ids), articleID, feedID, baseSlug)
-	return err
+	return asUnstorable(err)
 }
 
 // LinkUpdate is a partial write to a link's reading state. Nil fields are left

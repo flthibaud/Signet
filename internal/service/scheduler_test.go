@@ -129,6 +129,7 @@ func TestProcessFeedLogLevels(t *testing.T) {
 		wantLevel string
 	}{
 		{"synced", SyncResult{Status: SyncSynced, NewArticles: 3}, "INFO"},
+		{"synced past an unstorable item", SyncResult{Status: SyncSynced, UnstorableItems: 1}, "INFO"},
 		{"failed", SyncResult{Status: SyncFailed, Failures: 2, Err: errors.New("status 500")}, "INFO"},
 		{"deactivated", SyncResult{Status: SyncDeactivated, Failures: 10, Err: errors.New("status 404")}, "INFO"},
 		{"cancelled", SyncResult{Status: SyncCancelled}, "INFO"},

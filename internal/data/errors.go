@@ -6,6 +6,7 @@
 // nothing about HTTP: ErrRecordNotFound, ErrDuplicateEmail, ErrDuplicateUsername,
 // ErrDuplicateFolder and ErrEditConflict are what handlers match with errors.Is
 // to pick a response. Anything else is unexpected and becomes a 500.
+// ErrUnstorable is the one matched by the feed sync rather than by a handler.
 //
 // Ownership is enforced in the WHERE clause, not above it. A user-scoped read or
 // write always carries its user_id, so a row belonging to someone else is
@@ -16,6 +17,7 @@ package data
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/lib/pq"
 )
@@ -25,6 +27,37 @@ import (
 // query's user_id predicate excluded it. The two are deliberately
 // indistinguishable. Handlers turn it into a 404.
 var ErrRecordNotFound = errors.New("record not found")
+
+// ErrUnstorable reports a write PostgreSQL refused because of the data itself,
+// a value it cannot hold or a constraint it breaks, so retrying the same write
+// gets the same refusal. The feed sync matches it to move past an item that can
+// never be stored instead of re-downloading the feed every sync to retry it.
+// The driver's error stays wrapped inside.
+var ErrUnstorable = errors.New("rejected by the database")
+
+// foreignKeyViolation is the SQLSTATE Postgres reports for a reference to a
+// row that does not exist.
+const foreignKeyViolation = "23503"
+
+// asUnstorable wraps err in ErrUnstorable when Postgres rejected the data
+// itself: SQLSTATE class 22 (data exception) or 23 (integrity constraint
+// violation). Anything else, a timeout, a dropped connection or a cancelled
+// query, may succeed next time and is returned unchanged.
+//
+// A foreign key violation is the exception within class 23: on the tables the
+// feed sync writes, it means a user or feed was deleted while the sync ran,
+// and the next sync will not run into it again.
+func asUnstorable(err error) error {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) || pqErr.Code == foreignKeyViolation {
+		return err
+	}
+	switch pqErr.Code.Class() {
+	case "22", "23":
+		return fmt.Errorf("%w: %w", ErrUnstorable, err)
+	}
+	return err
+}
 
 // uniqueViolation is the SQLSTATE class Postgres reports for a unique
 // constraint breach.

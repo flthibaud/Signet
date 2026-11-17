@@ -272,6 +272,9 @@ func (s *Scheduler) processFeed(ctx context.Context, feed *data.Feed) {
 	if res.FailedItems > 0 {
 		props["failed_items"] = strconv.Itoa(res.FailedItems)
 	}
+	if res.UnstorableItems > 0 {
+		props["unstorable_items"] = strconv.Itoa(res.UnstorableItems)
+	}
 	if res.Status == SyncFailed || res.Status == SyncDeactivated {
 		props["failures"] = strconv.Itoa(res.Failures)
 	}
