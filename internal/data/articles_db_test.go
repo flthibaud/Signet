@@ -57,6 +57,30 @@ func TestArticleInsertKeepsReadingTime(t *testing.T) {
 	}
 }
 
+func TestArticleIDByHash(t *testing.T) {
+	db := testDB(t)
+	m := ArticleModel{DB: db}
+	ctx := context.Background()
+
+	id := seedArticle(t, db, articleFixture{})
+	var hash string
+	if err := db.QueryRowContext(ctx, `SELECT hash FROM articles WHERE id = $1`, id).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := m.IDByHash(ctx, hash)
+	if err != nil {
+		t.Fatalf("IDByHash: %v", err)
+	}
+	if got != id {
+		t.Errorf("IDByHash = %d, want %d", got, id)
+	}
+
+	if _, err := m.IDByHash(ctx, "test-"+uuid.NewString()); !errors.Is(err, ErrRecordNotFound) {
+		t.Errorf("unknown hash: err = %v, want ErrRecordNotFound", err)
+	}
+}
+
 // The feed sync tells an item the database will always refuse from one that may
 // go through next time, and only lets the first one advance the feed's ETag.
 func TestArticleInsertReportsUnstorableData(t *testing.T) {

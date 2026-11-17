@@ -69,18 +69,18 @@ func (f *fakeSyncFeedStore) Unclaim(ctx context.Context, feedID int64) error {
 
 type fakeArticleStore struct {
 	mu        sync.Mutex
-	byHash    map[string]*data.Article
+	byHash    map[string]int64
 	insertErr map[string]error // by article URL
 	inserted  []*data.Article
 }
 
-func (f *fakeArticleStore) GetByHash(ctx context.Context, hash string) (*data.Article, error) {
+func (f *fakeArticleStore) IDByHash(ctx context.Context, hash string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if a, ok := f.byHash[hash]; ok {
-		return a, nil
+	if id, ok := f.byHash[hash]; ok {
+		return id, nil
 	}
-	return nil, data.ErrRecordNotFound
+	return 0, data.ErrRecordNotFound
 }
 
 func (f *fakeArticleStore) Insert(ctx context.Context, article *data.Article) error {
@@ -126,7 +126,7 @@ func newSyncTestService(t *testing.T) (*FeedService, *syncFakes) {
 
 	f := &syncFakes{
 		feeds:    &fakeSyncFeedStore{},
-		articles: &fakeArticleStore{byHash: map[string]*data.Article{}, insertErr: map[string]error{}},
+		articles: &fakeArticleStore{byHash: map[string]int64{}, insertErr: map[string]error{}},
 		links:    &fakeLinkStore{},
 		logged:   &lockedBuffer{},
 	}
@@ -283,7 +283,7 @@ func TestSyncFeedHoldsHeadersBackOnFailedItem(t *testing.T) {
 	srv, _ := feedServer(t, map[string]string{"ETag": `"new"`}, func(base string) string {
 		return rss(base+"/known", base+"/broken")
 	})
-	f.articles.byHash[hashURL(srv.URL+"/known")] = &data.Article{ID: 7}
+	f.articles.byHash[hashURL(srv.URL+"/known")] = 7
 	f.articles.insertErr[srv.URL+"/broken"] = errors.New("connection reset by peer")
 
 	res := s.SyncFeed(context.Background(), &data.Feed{ID: 1, Url: srv.URL + "/feed.xml", HttpEtag: `"old"`})
@@ -314,7 +314,7 @@ func TestSyncFeedAdvancesHeadersPastUnstorableItem(t *testing.T) {
 	srv, _ := feedServer(t, map[string]string{"ETag": `"new"`}, func(base string) string {
 		return rss(base+"/known", base+"/unstorable")
 	})
-	f.articles.byHash[hashURL(srv.URL+"/known")] = &data.Article{ID: 7}
+	f.articles.byHash[hashURL(srv.URL+"/known")] = 7
 	f.articles.insertErr[srv.URL+"/unstorable"] = fmt.Errorf("%w: check constraint", data.ErrUnstorable)
 
 	res := s.SyncFeed(context.Background(), &data.Feed{ID: 1, Url: srv.URL + "/feed.xml", HttpEtag: `"old"`})
@@ -335,7 +335,7 @@ func TestSyncFeedAdvancesHeadersPastUnstorableItem(t *testing.T) {
 func TestSyncFeedReusesKnownArticle(t *testing.T) {
 	s, f := newSyncTestService(t)
 	srv, pageHits := feedServer(t, nil, func(base string) string { return rss(base + "/known") })
-	f.articles.byHash[hashURL(srv.URL+"/known")] = &data.Article{ID: 7}
+	f.articles.byHash[hashURL(srv.URL+"/known")] = 7
 
 	res := s.SyncFeed(context.Background(), &data.Feed{ID: 1, Url: srv.URL + "/feed.xml"})
 

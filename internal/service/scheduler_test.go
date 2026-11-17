@@ -153,3 +153,23 @@ func TestProcessFeedLogLevels(t *testing.T) {
 		})
 	}
 }
+
+func TestDomainLimiterIsPerHostAndPerMap(t *testing.T) {
+	var polls, scrapes sync.Map
+
+	a := domainLimiter(&polls, "a.test")
+	if domainLimiter(&polls, "a.test") != a {
+		t.Error("the same host got a second limiter, so it would get twice the budget")
+	}
+	if domainLimiter(&polls, "b.test") == a {
+		t.Error("two hosts share one limiter")
+	}
+	if domainLimiter(&scrapes, "a.test") == a {
+		t.Error("polling and scraping share one limiter for the same host")
+	}
+
+	// 1 req/s with a burst of 1: the first request goes through, the next waits.
+	if !a.Allow() || a.Allow() {
+		t.Error("the limiter is not 1 request per second")
+	}
+}

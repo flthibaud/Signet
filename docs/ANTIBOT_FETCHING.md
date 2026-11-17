@@ -218,8 +218,8 @@ protections dans `solver.go` / `scrape.go` :
   les items restants — et comme un item raté empêche l'ETag d'avancer, le tick
   suivant refait tout, en boucle. Budget épuisé → on retombe direct sur le
   contenu RSS.
-- Le rate-limit par domaine existant (`scrapeLimiter`, 1 req/s) s'applique avant
-  toute l'échelle.
+- Le rate-limit par domaine existant (`domainLimiter` sur `scrapeLimiters`,
+  1 req/s, distinct de celui du polling RSS) s'applique avant toute l'échelle.
 
 ### Mémoire par domaine
 

@@ -257,7 +257,7 @@ func (s *Scheduler) syncFeeds() {
 func (s *Scheduler) processFeed(ctx context.Context, feed *data.Feed) {
 	// A wait cut short by the shutdown still goes on to SyncFeed, which sees the
 	// cancelled context and gives the claim back.
-	_ = s.getOrCreateLimiter(extractDomain(feed.Url)).Wait(ctx)
+	_ = domainLimiter(&s.domainLimiters, extractDomain(feed.Url)).Wait(ctx)
 
 	res := s.syncer.SyncFeed(ctx, feed)
 
@@ -291,12 +291,14 @@ func (s *Scheduler) processFeed(ctx context.Context, feed *data.Feed) {
 	s.logger.PrintInfo("feed sync finished", props)
 }
 
-func (s *Scheduler) getOrCreateLimiter(domain string) *rate.Limiter {
-	if v, ok := s.domainLimiters.Load(domain); ok {
+// domainLimiter returns the 1 req/s limiter m holds for host, creating it on
+// first use. Feed polling and article scraping each pass their own map, so a
+// sync's poll of a site does not eat into the budget for scraping its articles.
+func domainLimiter(m *sync.Map, host string) *rate.Limiter {
+	if v, ok := m.Load(host); ok {
 		return v.(*rate.Limiter)
 	}
-	limiter := rate.NewLimiter(rate.Every(time.Second), 1)
-	actual, _ := s.domainLimiters.LoadOrStore(domain, limiter)
+	actual, _ := m.LoadOrStore(host, rate.NewLimiter(rate.Every(time.Second), 1))
 	return actual.(*rate.Limiter)
 }
 
