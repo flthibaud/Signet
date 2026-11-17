@@ -24,7 +24,7 @@ func (app *application) serve() error {
 	}
 
 	// Start the background scheduler
-	app.scheduler.Start()
+	app.services.Scheduler.Start()
 
 	shutdownError := make(chan error)
 
@@ -41,14 +41,12 @@ func (app *application) serve() error {
 		defer cancel()
 
 		// Stop the HTTP server first: Shutdown waits for in-flight requests but
-		// refuses new ones, so no handler can start a background import on a
-		// context that is already being torn down (wg.Go after wg.Wait, a failed
-		// fetch counted against a healthy feed) while the workers drain below.
+		// refuses new ones, so no handler can start an OPML import on a context
+		// that is already being torn down (wg.Go after wg.Wait) while the
+		// background work drains below.
 		err := srv.Shutdown(ctx)
 
-		app.scheduler.Stop()
-
-		app.services.SubscriptionService.Shutdown()
+		app.services.Scheduler.Stop()
 
 		app.services.OPMLService.Shutdown()
 

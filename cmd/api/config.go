@@ -22,11 +22,7 @@ type config struct {
 		burst   int
 		enabled bool
 	}
-	scheduler struct {
-		interval  time.Duration
-		workers   int
-		batchSize int
-	}
+	scheduler           service.SchedulerConfig
 	hstsMaxAge          int
 	sessionTTL          time.Duration
 	trustedProxyCount   int
@@ -65,14 +61,14 @@ func loadConfig() (config, error) {
 	cfg.trustedProxyCount = l.Int("TRUSTED_PROXY_COUNT", 0)
 	l.Check(cfg.trustedProxyCount >= 0, "TRUSTED_PROXY_COUNT", "must not be negative")
 
-	cfg.scheduler.interval = l.Duration("SCHEDULER_INTERVAL", service.DefaultSyncInterval)
-	l.Check(cfg.scheduler.interval > 0, "SCHEDULER_INTERVAL", "must be positive")
+	cfg.scheduler.Interval = l.Duration("SCHEDULER_INTERVAL", service.DefaultSyncInterval)
+	l.Check(cfg.scheduler.Interval > 0, "SCHEDULER_INTERVAL", "must be positive")
 
-	cfg.scheduler.workers = l.Int("SCHEDULER_WORKERS", 5)
-	l.Check(cfg.scheduler.workers > 0, "SCHEDULER_WORKERS", "must be greater than 0")
+	cfg.scheduler.Workers = l.Int("SCHEDULER_WORKERS", 5)
+	l.Check(cfg.scheduler.Workers > 0, "SCHEDULER_WORKERS", "must be greater than 0")
 
-	cfg.scheduler.batchSize = l.Int("SCHEDULER_BATCH_SIZE", 50)
-	l.Check(cfg.scheduler.batchSize > 0, "SCHEDULER_BATCH_SIZE", "must be greater than 0")
+	cfg.scheduler.BatchSize = l.Int("SCHEDULER_BATCH_SIZE", 50)
+	l.Check(cfg.scheduler.BatchSize > 0, "SCHEDULER_BATCH_SIZE", "must be greater than 0")
 
 	// A year, the usual HSTS lifetime. Only ever sent over HTTPS (see
 	// secureHeaders), so a plain-HTTP install ignores it; 0 disables it outright.

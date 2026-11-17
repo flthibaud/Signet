@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/flthibaud/signet/internal/data"
@@ -26,59 +25,49 @@ type subscriptionStore interface {
 	Insert(ctx context.Context, sub *data.Subscription) error
 }
 
-type feedImporter interface {
+type feedCreator interface {
 	CreateFromURL(ctx context.Context, url string) (*data.Feed, error)
-	ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) error
 }
 
-// shutdownGrace bounds how long Shutdown waits for cancelled imports to return.
-// It only has to cover the unwinding after cancellation, not the import itself.
-const shutdownGrace = 5 * time.Second
-
-func cancelledByShutdown(ctx context.Context, err error) bool {
-	return ctx.Err() != nil && errors.Is(err, context.Canceled)
+// SyncTrigger asks the scheduler to run a sync pass now instead of waiting for
+// its next tick.
+type SyncTrigger interface {
+	TriggerSync()
 }
 
 // SubscriptionService owns the subscribe sequence: resolve or create the feed,
-// insert the subscription, and import the feed's articles in the background.
+// insert the subscription, and hand the feed to the scheduler.
 //
 // It depends on the narrow store interfaces declared above rather than on
 // data.Models, so it can be driven with fakes in tests; data.FeedModel and
 // data.SubscriptionModel satisfy them as they are.
 //
-// It holds its own context and WaitGroup because the article import outlives
-// the request that triggered it — the HTTP request's context is cancelled the
-// moment the response is written. Shutdown is what cancels those goroutines.
+// It never imports articles itself. The scheduler is the only thing that runs
+// a feed sync, so every sync holds a claim on its feed; an import started from
+// here would run unclaimed, alongside any worker already syncing that feed.
 type SubscriptionService struct {
 	feeds   feedStore
 	subs    subscriptionStore
-	feedSvc feedImporter
+	feedSvc feedCreator
+	trigger SyncTrigger
 	logger  *jsonlog.Logger
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
 }
 
-// NewSubscriptionService builds the service with a context of its own for the
-// background imports. Pair it with Shutdown.
-func NewSubscriptionService(models data.Models, feedSvc *FeedService, logger *jsonlog.Logger) *SubscriptionService {
-	ctx, cancel := context.WithCancel(context.Background())
-
+// NewSubscriptionService builds the service. trigger is the scheduler.
+func NewSubscriptionService(models data.Models, feedSvc *FeedService, trigger SyncTrigger, logger *jsonlog.Logger) *SubscriptionService {
 	return &SubscriptionService{
 		feeds:   models.Feeds,
 		subs:    models.Subscriptions,
 		feedSvc: feedSvc,
+		trigger: trigger,
 		logger:  logger,
-		ctx:     ctx,
-		cancel:  cancel,
 	}
 }
 
 // SubscribeOptions carries what varies between subscribing from the form and
 // subscribing from an OPML import.
 type SubscribeOptions struct {
-	FolderID    *int64
-	DeferImport bool
+	FolderID *int64
 }
 
 // Subscribe signs userID up to the feed at feedURL, creating the feed itself if
@@ -132,73 +121,16 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, userID uuid.UUID, f
 
 	subscription.Feed = *feed
 
-	if !feedCreated {
-		if err := s.feeds.MarkDueForSync(ctx, []int64{feed.ID}); err != nil {
-			s.logger.PrintError(err, map[string]string{
-				"context": "marking an existing feed due for a new subscriber",
-				"feed_id": strconv.FormatInt(feed.ID, 10),
-			})
-		}
-	}
-
-	if !opts.DeferImport {
-		s.importAsync(feed)
+	// A new subscriber's articles come from the next sync of the feed, so make
+	// it due now and wake the scheduler rather than wait for its next tick.
+	if err := s.feeds.MarkDueForSync(ctx, []int64{feed.ID}); err != nil {
+		s.logger.PrintError(err, map[string]string{
+			"context": "marking a feed due for a new subscriber",
+			"feed_id": strconv.FormatInt(feed.ID, 10),
+		})
+	} else {
+		s.trigger.TriggerSync()
 	}
 
 	return subscription, nil
-}
-
-// importAsync pulls the feed's articles in the background, so the caller isn't
-// held while a whole feed is fetched and scraped.
-func (s *SubscriptionService) importAsync(feed *data.Feed) {
-	s.wg.Go(func() {
-		err := s.feedSvc.ImportArticlesForSubscribers(s.ctx, feed)
-		if err == nil {
-			return
-		}
-
-		// An import cut short by Shutdown is the shutdown working, not a failure.
-		// The scheduler's next tick picks the feed back up.
-		if cancelledByShutdown(s.ctx, err) {
-			s.logger.PrintInfo("article import cancelled at shutdown", map[string]string{
-				"feed_id": strconv.FormatInt(feed.ID, 10),
-			})
-			return
-		}
-
-		// Same rule as the scheduler: a feed the far end would not serve is not
-		// this program failing.
-		var fetchErr *FeedFetchError
-		if errors.As(err, &fetchErr) {
-			s.logger.PrintInfo("article import failed", map[string]string{
-				"feed_id":  strconv.FormatInt(feed.ID, 10),
-				"reason":   fetchErr.Error(),
-				"failures": strconv.Itoa(fetchErr.Failures),
-			})
-			return
-		}
-
-		s.logger.PrintError(err, map[string]string{
-			"context": "importing articles for new subscription",
-			"feed_id": strconv.FormatInt(feed.ID, 10),
-		})
-	})
-}
-
-// Shutdown cancels the imports still in flight and gives them a moment to
-// unwind.
-func (s *SubscriptionService) Shutdown() {
-	s.cancel()
-
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(shutdownGrace):
-		s.logger.PrintError(errors.New("timed out waiting for article imports to stop"), nil)
-	}
 }

@@ -86,11 +86,17 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 // MarkDueForSync makes feeds eligible for the scheduler's next pass and clears
 // their conditional-request headers.
 //
-// Both halves matter when someone subscribes to a feed the instance already
-// knows. ImportArticlesForSubscribers returns on a 304 before creating any
-// links, so keeping the ETag would leave the new subscriber with an empty
-// library until the feed happened to publish something. Clearing the headers
-// forces a 200 and a full re-read.
+// Every new subscription goes through it. A feed the instance already knows
+// needs both halves: ImportArticlesForSubscribers returns on a 304 before
+// creating any links, so keeping the ETag would leave the new subscriber with
+// an empty library until the feed happened to publish something. Clearing the
+// headers forces a 200 and a full re-read. A feed just created needs the first
+// half, since Insert stamps last_fetched_at and it would otherwise wait a whole
+// interval.
+//
+// Clearing fetching_since also drops the claim of a sync already running on the
+// feed, which ReleaseFeed and MarkFeedFailed then decline to finish, so the
+// feed stays due for the new subscriber.
 //
 // last_fetched_at is set to the epoch rather than NULL because GetByURL
 // scans that column into a plain time.Time.
@@ -232,6 +238,12 @@ func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInt
 
 // ReleaseFeed marks a feed as successfully synced, updating HTTP caching
 // headers. A success also reactivates a feed MarkFeedFailed had switched off.
+//
+// It writes nothing when the claim is gone: MarkDueForSync clears
+// fetching_since when someone subscribes mid-sync, and that sync read the
+// subscriber list before them. Stamping its ETag and last_fetched_at over the
+// reset would turn the next sync into a 304 and leave the new subscriber with
+// an empty library.
 func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModified string) error {
 	query := `
 		UPDATE feeds
@@ -241,7 +253,7 @@ func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModi
 		    is_active = TRUE,
 		    http_etag = $2,
 		    http_last_modified = $3
-		WHERE id = $1`
+		WHERE id = $1 AND fetching_since IS NOT NULL`
 
 	_, err := m.DB.ExecContext(ctx, query, feedID, etag, lastModified)
 	return err
@@ -254,6 +266,10 @@ func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModi
 // "last attempt". That is what keeps the scheduler, which drains every due feed
 // in one pass, from claiming a feed that just failed again within that pass, and
 // what spaces a deactivated feed's retries deadFeedRetryInterval apart.
+//
+// Like ReleaseFeed, it leaves a feed whose claim MarkDueForSync reset alone, and
+// reports zero failures for it: that feed is due for a fresh sync, so this
+// failure says nothing about it.
 func (m FeedModel) MarkFeedFailed(ctx context.Context, feedID int64) (int, error) {
 	query := `
 		UPDATE feeds
@@ -261,10 +277,13 @@ func (m FeedModel) MarkFeedFailed(ctx context.Context, feedID int64) (int, error
 		    consecutive_failures = consecutive_failures + 1,
 		    is_active = CASE WHEN consecutive_failures + 1 >= 10 THEN FALSE ELSE is_active END,
 		    last_fetched_at = NOW()
-		WHERE id = $1
+		WHERE id = $1 AND fetching_since IS NOT NULL
 		RETURNING consecutive_failures`
 
 	var failures int
 	err := m.DB.QueryRowContext(ctx, query, feedID).Scan(&failures)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
 	return failures, err
 }

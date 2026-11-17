@@ -39,12 +39,11 @@ import (
 var version = "dev"
 
 type application struct {
-	config    config
-	logger    *jsonlog.Logger
-	db        *sql.DB
-	models    data.Models
-	services  service.Services
-	scheduler *service.Scheduler
+	config   config
+	logger   *jsonlog.Logger
+	db       *sql.DB
+	models   data.Models
+	services service.Services
 }
 
 func main() {
@@ -88,21 +87,15 @@ func main() {
 	// 2. Init de la couche DATA
 	models := data.NewModels(db)
 
-	// 3. Init de la couche SERVICE (avec injection de data)
-	services := service.NewServices(models, logger, cfg.fetch)
-
-	// 4. Init du scheduler
-	scheduler := service.NewScheduler(&services, logger, cfg.scheduler.interval, cfg.scheduler.workers, cfg.scheduler.batchSize)
-
-	services.OPMLService.SetSyncTrigger(scheduler)
+	// 3. Init de la couche SERVICE (avec injection de data), scheduler compris
+	services := service.NewServices(models, logger, cfg.fetch, cfg.scheduler)
 
 	app := &application{
-		config:    cfg,
-		logger:    logger,
-		db:        db,
-		models:    models,
-		services:  services,
-		scheduler: scheduler,
+		config:   cfg,
+		logger:   logger,
+		db:       db,
+		models:   models,
+		services: services,
 	}
 
 	// Start the HTTP server.

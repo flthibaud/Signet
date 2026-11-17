@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/flthibaud/signet/internal/data"
 	"github.com/flthibaud/signet/internal/jsonlog"
@@ -68,18 +66,13 @@ func (f *fakeSubscriptionStore) Insert(ctx context.Context, sub *data.Subscripti
 	return nil
 }
 
-type fakeFeedImporter struct {
+type fakeFeedCreator struct {
 	created    *data.Feed
 	createErr  error
 	createCall int
-
-	// imported is closed by ImportArticlesForSubscribers so a test can wait for
-	// the background goroutine instead of sleeping.
-	imported   chan struct{}
-	importHold bool // block until the context is cancelled
 }
 
-func (f *fakeFeedImporter) CreateFromURL(ctx context.Context, url string) (*data.Feed, error) {
+func (f *fakeFeedCreator) CreateFromURL(ctx context.Context, url string) (*data.Feed, error) {
 	f.createCall++
 	if f.createErr != nil {
 		return nil, f.createErr
@@ -87,38 +80,29 @@ func (f *fakeFeedImporter) CreateFromURL(ctx context.Context, url string) (*data
 	return f.created, nil
 }
 
-func (f *fakeFeedImporter) ImportArticlesForSubscribers(ctx context.Context, feed *data.Feed) error {
-	if f.imported != nil {
-		close(f.imported)
-	}
-	if f.importHold {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	return nil
+type fakeSyncTrigger struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *fakeSyncTrigger) TriggerSync() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
 }
 
 // newTestSubscriptionService builds the service directly rather than through
 // NewSubscriptionService, which insists on the concrete data.Models.
-func newTestSubscriptionService(feeds feedStore, subs subscriptionStore, importer feedImporter) *SubscriptionService {
-	svc, _ := newTestSubscriptionServiceWithLog(feeds, subs, importer)
-	return svc
-}
-
-// newTestSubscriptionServiceWithLog also hands back the buffer the service logs
-// into, for the tests that care about what was reported.
-func newTestSubscriptionServiceWithLog(feeds feedStore, subs subscriptionStore, importer feedImporter) (*SubscriptionService, *lockedBuffer) {
-	ctx, cancel := context.WithCancel(context.Background())
-	out := &lockedBuffer{}
+func newTestSubscriptionService(feeds feedStore, subs subscriptionStore, creator feedCreator) (*SubscriptionService, *fakeSyncTrigger) {
+	trigger := &fakeSyncTrigger{}
 
 	return &SubscriptionService{
 		feeds:   feeds,
 		subs:    subs,
-		feedSvc: importer,
-		logger:  jsonlog.New(out, jsonlog.LevelInfo),
-		ctx:     ctx,
-		cancel:  cancel,
-	}, out
+		feedSvc: creator,
+		trigger: trigger,
+		logger:  jsonlog.New(&lockedBuffer{}, jsonlog.LevelInfo),
+	}, trigger
 }
 
 // lockedBuffer is a bytes.Buffer safe to read while a background import is
@@ -142,14 +126,28 @@ func (b *lockedBuffer) String() string {
 
 // --- tests ---------------------------------------------------------------
 
+// assertHandedToScheduler checks the one thing a successful subscribe owes the
+// new subscriber: the feed is due and the scheduler is awake, since the next
+// sync is what brings their articles in.
+func assertHandedToScheduler(t *testing.T, feeds *fakeFeedStore, trigger *fakeSyncTrigger, feedID int64) {
+	t.Helper()
+
+	if len(feeds.markedDue) != 1 || len(feeds.markedDue[0]) != 1 || feeds.markedDue[0][0] != feedID {
+		t.Errorf("marked due: got %v, want just feed %d", feeds.markedDue, feedID)
+	}
+	if trigger.calls != 1 {
+		t.Errorf("TriggerSync calls: got %d, want 1", trigger.calls)
+	}
+}
+
 func TestSubscribeCreatesMissingFeed(t *testing.T) {
 	newFeed := &data.Feed{ID: 42, Url: "https://example.com/feed.xml"}
 
 	feeds := &fakeFeedStore{} // nothing in the database
 	subs := &fakeSubscriptionStore{}
-	importer := &fakeFeedImporter{created: newFeed, imported: make(chan struct{})}
+	creator := &fakeFeedCreator{created: newFeed}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, trigger := newTestSubscriptionService(feeds, subs, creator)
 	userID := uuid.New()
 
 	sub, err := svc.Subscribe(context.Background(), userID, newFeed.Url, SubscribeOptions{})
@@ -157,8 +155,8 @@ func TestSubscribeCreatesMissingFeed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if importer.createCall != 1 {
-		t.Errorf("CreateFromURL calls: got %d, want 1", importer.createCall)
+	if creator.createCall != 1 {
+		t.Errorf("CreateFromURL calls: got %d, want 1", creator.createCall)
 	}
 	if len(subs.inserted) != 1 {
 		t.Fatalf("inserted subscriptions: got %d, want 1", len(subs.inserted))
@@ -175,13 +173,9 @@ func TestSubscribeCreatesMissingFeed(t *testing.T) {
 		t.Errorf("nothing failed, so no feed should have been cleaned up: %v", feeds.deletedIDs)
 	}
 
-	// The import is scheduled, not awaited.
-	select {
-	case <-importer.imported:
-	case <-time.After(2 * time.Second):
-		t.Error("the article import was never started")
-	}
-	svc.Shutdown()
+	// A feed just created carries a fresh last_fetched_at, so without the mark
+	// it would wait a whole interval for its first sync.
+	assertHandedToScheduler(t, feeds, trigger, newFeed.ID)
 }
 
 func TestSubscribeReusesExistingFeed(t *testing.T) {
@@ -189,66 +183,36 @@ func TestSubscribeReusesExistingFeed(t *testing.T) {
 
 	feeds := &fakeFeedStore{feed: existing}
 	subs := &fakeSubscriptionStore{}
-	importer := &fakeFeedImporter{}
+	creator := &fakeFeedCreator{}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, trigger := newTestSubscriptionService(feeds, subs, creator)
 
 	sub, err := svc.Subscribe(context.Background(), uuid.New(), existing.Url, SubscribeOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if importer.createCall != 0 {
-		t.Errorf("a feed already on file must not be re-created, got %d calls", importer.createCall)
+	if creator.createCall != 0 {
+		t.Errorf("a feed already on file must not be re-created, got %d calls", creator.createCall)
 	}
 	if sub.FeedID != existing.ID {
 		t.Errorf("feed id: got %d, want %d", sub.FeedID, existing.ID)
 	}
 
-	if len(feeds.markedDue) != 1 {
-		t.Fatalf("MarkDueForSync calls: got %d, want 1", len(feeds.markedDue))
-	}
-	if len(feeds.markedDue[0]) != 1 || feeds.markedDue[0][0] != existing.ID {
-		t.Errorf("marked %v due, want just feed %d", feeds.markedDue[0], existing.ID)
-	}
-	svc.Shutdown()
+	assertHandedToScheduler(t, feeds, trigger, existing.ID)
 }
 
-// The mirror case: a feed that was just created has no ETag and its import is
-// about to fetch everything anyway, so there is nothing to reset.
-func TestSubscribeDoesNotResetFreshFeed(t *testing.T) {
-	newFeed := &data.Feed{ID: 42, Url: "https://example.com/feed.xml"}
-
-	feeds := &fakeFeedStore{} // nothing in the database
-	subs := &fakeSubscriptionStore{}
-	importer := &fakeFeedImporter{created: newFeed}
-
-	svc := newTestSubscriptionService(feeds, subs, importer)
-
-	if _, err := svc.Subscribe(context.Background(), uuid.New(), newFeed.Url, SubscribeOptions{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(feeds.markedDue) != 0 {
-		t.Errorf("a freshly created feed should not be marked due, got %v", feeds.markedDue)
-	}
-	svc.Shutdown()
-}
-
-// DeferImport is what keeps an OPML file of 200 feeds from starting 200
-// concurrent imports.
-func TestSubscribeDeferredImport(t *testing.T) {
+func TestSubscribeFilesIntoFolder(t *testing.T) {
 	folderID := int64(3)
 
 	feeds := &fakeFeedStore{}
 	subs := &fakeSubscriptionStore{}
-	importer := &fakeFeedImporter{created: &data.Feed{ID: 42}, imported: make(chan struct{})}
+	creator := &fakeFeedCreator{created: &data.Feed{ID: 42}}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, _ := newTestSubscriptionService(feeds, subs, creator)
 
 	sub, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{
-		FolderID:    &folderID,
-		DeferImport: true,
+		FolderID: &folderID,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -257,22 +221,31 @@ func TestSubscribeDeferredImport(t *testing.T) {
 	if sub.FolderID == nil || *sub.FolderID != folderID {
 		t.Errorf("folder: got %v, want %d", sub.FolderID, folderID)
 	}
-
-	// Shutdown waits for anything that was started, so once it returns the
-	// channel is a reliable witness.
-	svc.Shutdown()
-
-	select {
-	case <-importer.imported:
-		t.Error("DeferImport must not start the per-feed article import")
-	default:
-	}
-
 	if len(subs.inserted) != 1 {
 		t.Fatalf("inserted subscriptions: got %d, want 1", len(subs.inserted))
 	}
 	if subs.inserted[0].FolderID == nil || *subs.inserted[0].FolderID != folderID {
 		t.Errorf("the folder was not persisted: %+v", subs.inserted[0])
+	}
+}
+
+// The subscription is what the user asked for and it exists, so failing to
+// mark the feed due is logged rather than reported: the feed still syncs, a
+// tick later than it could have.
+func TestSubscribeSurvivesMarkFailure(t *testing.T) {
+	feeds := &fakeFeedStore{feed: &data.Feed{ID: 7}, markErr: errors.New("database blip")}
+	subs := &fakeSubscriptionStore{}
+
+	svc, trigger := newTestSubscriptionService(feeds, subs, &fakeFeedCreator{})
+
+	if _, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(subs.inserted) != 1 {
+		t.Fatalf("inserted subscriptions: got %d, want 1", len(subs.inserted))
+	}
+	if trigger.calls != 0 {
+		t.Errorf("a feed that is not due gives the scheduler nothing to do, got %d triggers", trigger.calls)
 	}
 }
 
@@ -284,9 +257,8 @@ func TestSubscribeWhenAlreadySubscribed(t *testing.T) {
 
 	feeds := &fakeFeedStore{feed: existing}
 	subs := &fakeSubscriptionStore{insertErr: data.ErrDuplicateSubscription}
-	importer := &fakeFeedImporter{}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, trigger := newTestSubscriptionService(feeds, subs, &fakeFeedCreator{})
 
 	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if !errors.Is(err, ErrAlreadySubscribed) {
@@ -298,7 +270,11 @@ func TestSubscribeWhenAlreadySubscribed(t *testing.T) {
 	if len(feeds.deletedIDs) != 0 {
 		t.Errorf("the feed pre-existed and must survive, got deletes for %v", feeds.deletedIDs)
 	}
-	svc.Shutdown()
+	// Marking would clear the ETag and force a full re-read of the feed for a
+	// subscriber who already has its articles.
+	if len(feeds.markedDue) != 0 || trigger.calls != 0 {
+		t.Errorf("a refused subscribe must leave the feed alone, got marks %v and %d triggers", feeds.markedDue, trigger.calls)
+	}
 }
 
 // A feed created for a subscription that then fails to insert has no subscriber
@@ -308,9 +284,8 @@ func TestSubscribeCleansUpFeedItCreated(t *testing.T) {
 
 	feeds := &fakeFeedStore{}
 	subs := &fakeSubscriptionStore{insertErr: errors.New("insert failed")}
-	importer := &fakeFeedImporter{created: newFeed}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, _ := newTestSubscriptionService(feeds, subs, &fakeFeedCreator{created: newFeed})
 
 	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if err == nil {
@@ -320,7 +295,6 @@ func TestSubscribeCleansUpFeedItCreated(t *testing.T) {
 	if len(feeds.deletedIDs) != 1 || feeds.deletedIDs[0] != newFeed.ID {
 		t.Errorf("expected cleanup of feed %d, got %v", newFeed.ID, feeds.deletedIDs)
 	}
-	svc.Shutdown()
 }
 
 // The mirror image, and the one that matters: a feed that was already on file
@@ -330,9 +304,8 @@ func TestSubscribeLeavesPreexistingFeedAloneOnFailure(t *testing.T) {
 
 	feeds := &fakeFeedStore{feed: existing}
 	subs := &fakeSubscriptionStore{insertErr: errors.New("insert failed")}
-	importer := &fakeFeedImporter{}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, _ := newTestSubscriptionService(feeds, subs, &fakeFeedCreator{})
 
 	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if err == nil {
@@ -342,7 +315,6 @@ func TestSubscribeLeavesPreexistingFeedAloneOnFailure(t *testing.T) {
 	if len(feeds.deletedIDs) != 0 {
 		t.Errorf("a pre-existing feed must never be deleted, got %v", feeds.deletedIDs)
 	}
-	svc.Shutdown()
 }
 
 func TestSubscribePropagatesFeedErrors(t *testing.T) {
@@ -358,9 +330,8 @@ func TestSubscribePropagatesFeedErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			feeds := &fakeFeedStore{}
 			subs := &fakeSubscriptionStore{}
-			importer := &fakeFeedImporter{createErr: tt.err}
 
-			svc := newTestSubscriptionService(feeds, subs, importer)
+			svc, _ := newTestSubscriptionService(feeds, subs, &fakeFeedCreator{createErr: tt.err})
 
 			_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 			if !errors.Is(err, tt.err) {
@@ -370,7 +341,6 @@ func TestSubscribePropagatesFeedErrors(t *testing.T) {
 			if len(feeds.deletedIDs) != 0 {
 				t.Errorf("no feed was created, nothing to clean up, got %v", feeds.deletedIDs)
 			}
-			svc.Shutdown()
 		})
 	}
 }
@@ -379,60 +349,15 @@ func TestSubscribeReportsLookupFailure(t *testing.T) {
 	lookupErr := errors.New("database down")
 
 	feeds := &fakeFeedStore{getErr: lookupErr}
-	subs := &fakeSubscriptionStore{}
-	importer := &fakeFeedImporter{}
+	creator := &fakeFeedCreator{}
 
-	svc := newTestSubscriptionService(feeds, subs, importer)
+	svc, _ := newTestSubscriptionService(feeds, &fakeSubscriptionStore{}, creator)
 
 	_, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{})
 	if !errors.Is(err, lookupErr) {
 		t.Fatalf("got %v, want %v", err, lookupErr)
 	}
-	if importer.createCall != 0 {
+	if creator.createCall != 0 {
 		t.Error("a failed lookup must not lead to a feed being created")
-	}
-	svc.Shutdown()
-}
-
-// Shutdown has to cancel an import that is still running and come back, rather
-// than let the goroutine be cut off at process exit.
-func TestShutdownCancelsInFlightImport(t *testing.T) {
-	feeds := &fakeFeedStore{}
-	subs := &fakeSubscriptionStore{}
-	importer := &fakeFeedImporter{
-		created:    &data.Feed{ID: 42},
-		imported:   make(chan struct{}),
-		importHold: true,
-	}
-
-	svc, logged := newTestSubscriptionServiceWithLog(feeds, subs, importer)
-
-	if _, err := svc.Subscribe(context.Background(), uuid.New(), "https://example.com/feed.xml", SubscribeOptions{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Wait until the import is actually running before shutting down.
-	select {
-	case <-importer.imported:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the article import was never started")
-	}
-
-	done := make(chan struct{})
-	go func() {
-		svc.Shutdown()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(shutdownGrace + 2*time.Second):
-		t.Fatal("Shutdown did not return")
-	}
-
-	// Cancelling on purpose is not a failure: reporting it at ERROR would put a
-	// stack trace in the logs on every restart.
-	if out := logged.String(); strings.Contains(out, `"level":"ERROR"`) {
-		t.Errorf("a cancelled import must not be logged as an error, got: %s", out)
 	}
 }

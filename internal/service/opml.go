@@ -19,9 +19,13 @@ const opmlImportWorkers = 4
 // cancellation so a shutdown still records how far the import got.
 const finishTimeout = 5 * time.Second
 
+// shutdownGrace bounds how long Shutdown waits for cancelled imports to return.
+// It only has to cover the unwinding after cancellation, not the import itself.
+const shutdownGrace = 5 * time.Second
+
 // The interfaces below are sized to what the import actually calls, so the
-// worker can be tested with fakes. data.FolderModel, data.OPMLImportModel,
-// data.FeedModel and *SubscriptionService satisfy them as they are.
+// worker can be tested with fakes. data.FolderModel, data.OPMLImportModel and
+// *SubscriptionService satisfy them as they are.
 
 type folderStore interface {
 	GetOrCreate(ctx context.Context, userID uuid.UUID, name string) (*data.Folder, error)
@@ -33,19 +37,8 @@ type importStore interface {
 	MarkFinished(ctx context.Context, id uuid.UUID, status string) error
 }
 
-type feedMarker interface {
-	MarkDueForSync(ctx context.Context, ids []int64) error
-}
-
 type subscriber interface {
 	Subscribe(ctx context.Context, userID uuid.UUID, feedURL string, opts SubscribeOptions) (*data.Subscription, error)
-}
-
-// SyncTrigger asks the scheduler to run a sync pass now instead of waiting for
-// its next tick. The scheduler is built after the services, so it is injected
-// afterwards through SetSyncTrigger.
-type SyncTrigger interface {
-	TriggerSync()
 }
 
 // OPMLService runs subscription-list imports.
@@ -53,12 +46,7 @@ type OPMLService struct {
 	subs    subscriber
 	folders folderStore
 	imports importStore
-	feeds   feedMarker
 	logger  *jsonlog.Logger
-
-	// syncTrigger is optional: without it the imported feeds simply wait for
-	// the scheduler's next tick.
-	syncTrigger SyncTrigger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -67,7 +55,7 @@ type OPMLService struct {
 
 // NewOPMLService builds the service with a context of its own, since an import
 // runs in the background well past the upload request that started it. Pair it
-// with Shutdown. The scheduler is wired in afterwards through SetSyncTrigger.
+// with Shutdown.
 func NewOPMLService(models data.Models, subs subscriber, logger *jsonlog.Logger) *OPMLService {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -75,16 +63,10 @@ func NewOPMLService(models data.Models, subs subscriber, logger *jsonlog.Logger)
 		subs:    subs,
 		folders: models.Folders,
 		imports: models.OPMLImports,
-		feeds:   models.Feeds,
 		logger:  logger,
 		ctx:     ctx,
 		cancel:  cancel,
 	}
-}
-
-// SetSyncTrigger wires the scheduler in once it exists.
-func (s *OPMLService) SetSyncTrigger(trigger SyncTrigger) {
-	s.syncTrigger = trigger
 }
 
 // StartImport records a job for the given entries and starts working on it in
@@ -103,19 +85,19 @@ func (s *OPMLService) StartImport(ctx context.Context, userID uuid.UUID, entries
 	return imp, nil
 }
 
-// run subscribes to every entry, then hands the feeds to the scheduler.
+// run subscribes to every entry. Each subscription wakes the scheduler, which
+// starts syncing the first feeds while the later ones are still being added;
+// its worker pool and per-domain limiter bound that, however long the file.
 func (s *OPMLService) run(importID, userID uuid.UUID, entries []opml.Entry) {
 	folders := s.resolveFolders(userID, entries)
 
 	work := make(chan opml.Entry)
-	var mu sync.Mutex
-	var feedIDs []int64
 
 	var workers sync.WaitGroup
 	for range opmlImportWorkers {
 		workers.Go(func() {
 			for entry := range work {
-				feedID, result := s.importEntry(userID, entry, folders[entry.Folder])
+				result := s.importEntry(userID, entry, folders[entry.Folder])
 
 				if s.ctx.Err() != nil {
 					return
@@ -126,12 +108,6 @@ func (s *OPMLService) run(importID, userID uuid.UUID, entries []opml.Entry) {
 						"context":   "recording an OPML import result",
 						"import_id": importID.String(),
 					})
-				}
-
-				if feedID != 0 {
-					mu.Lock()
-					feedIDs = append(feedIDs, feedID)
-					mu.Unlock()
 				}
 			}
 		})
@@ -156,32 +132,18 @@ dispatch:
 		return
 	}
 
-	if err := s.feeds.MarkDueForSync(s.ctx, feedIDs); err != nil {
-		s.logger.PrintError(err, map[string]string{
-			"context":   "marking imported feeds due for sync",
-			"import_id": importID.String(),
-		})
-	} else if s.syncTrigger != nil && len(feedIDs) > 0 {
-		s.syncTrigger.TriggerSync()
-	}
-
 	s.finish(importID, data.OPMLImportCompleted)
 }
 
 // importEntry subscribes to one feed and turns the outcome into a report line.
-// It returns the feed id on success, zero otherwise.
-func (s *OPMLService) importEntry(userID uuid.UUID, entry opml.Entry, folderID *int64) (int64, data.OPMLImportResult) {
+func (s *OPMLService) importEntry(userID uuid.UUID, entry opml.Entry, folderID *int64) data.OPMLImportResult {
 	result := data.OPMLImportResult{URL: entry.XMLURL, Title: entry.Title}
 
-	sub, err := s.subs.Subscribe(s.ctx, userID, entry.XMLURL, SubscribeOptions{
-		FolderID:    folderID,
-		DeferImport: true,
-	})
+	_, err := s.subs.Subscribe(s.ctx, userID, entry.XMLURL, SubscribeOptions{FolderID: folderID})
 
 	switch {
 	case err == nil:
 		result.Status = data.OPMLEntryImported
-		return sub.FeedID, result
 
 	case errors.Is(err, ErrAlreadySubscribed):
 		result.Status = data.OPMLEntrySkipped
@@ -206,7 +168,7 @@ func (s *OPMLService) importEntry(userID uuid.UUID, entry opml.Entry, folderID *
 		}
 	}
 
-	return 0, result
+	return result
 }
 
 // resolveFolders creates the file's folders up front, sequentially, and returns
