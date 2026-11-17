@@ -90,7 +90,7 @@ type syncFeedStore interface {
 }
 
 type articleStore interface {
-	GetByHash(ctx context.Context, hash string) (*data.Article, error)
+	IDByHash(ctx context.Context, hash string) (int64, error)
 	Insert(ctx context.Context, article *data.Article) error
 }
 
@@ -240,22 +240,23 @@ func (s *FeedService) SyncFeed(ctx context.Context, feed *data.Feed) (res SyncRe
 func (s *FeedService) syncItem(ctx context.Context, feed *data.Feed, item *gofeed.Item, link, language string, subscriberIDs []uuid.UUID) (bool, error) {
 	hash := hashURL(link)
 
-	article, err := s.articles.GetByHash(ctx, hash)
+	articleID, err := s.articles.IDByHash(ctx, hash)
 	if err != nil && !errors.Is(err, data.ErrRecordNotFound) {
 		return false, err
 	}
 
 	created := false
-	if article == nil {
-		article, err = s.createArticleFromItem(ctx, item, link, hash, language)
+	if err != nil {
+		article, err := s.createArticleFromItem(ctx, item, link, hash, language)
 		if err != nil {
 			return false, err
 		}
+		articleID = article.ID
 		created = true
 	}
 
 	if len(subscriberIDs) > 0 {
-		if err := s.links.BulkInsertForArticle(ctx, subscriberIDs, article.ID, feed.ID, slugFromHash(hash)); err != nil {
+		if err := s.links.BulkInsertForArticle(ctx, subscriberIDs, articleID, feed.ID, slugFromHash(hash)); err != nil {
 			return created, err
 		}
 	}

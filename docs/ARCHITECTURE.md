@@ -578,20 +578,21 @@ if link == "" {
 }
 hash := sha256(normalizeURL(link))
 
-// 2. Vérifier si l'article existe
-article, err := models.Articles.GetByHash(ctx, hash)
+// 2. Vérifier si l'article existe (l'ID seul : le corps de l'article peut
+//    peser des centaines de Ko et cette requête tourne pour chaque item)
+articleID, err := models.Articles.IDByHash(ctx, hash)
 
 // 3. Si nouveau, scraper le contenu
-if article == nil {
+if errors.Is(err, ErrRecordNotFound) {
     // Tente readability, fallback sur RSS description
     parsed := fetchWithReadability(item.Link)
-    article = createArticle(parsed, hash)
+    articleID = createArticle(parsed, hash).ID
 }
 
 // 4. Créer le link pour l'utilisateur
-if !linkExists(userID, article.ID) {
-    slug := generateUniqueSlug(userID, article.Title)
-    createLink(userID, article.ID, feedID, slug)
+if !linkExists(userID, articleID) {
+    slug := generateUniqueSlug(userID, title)
+    createLink(userID, articleID, feedID, slug)
 }
 ```
 
