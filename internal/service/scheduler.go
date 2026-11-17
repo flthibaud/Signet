@@ -21,7 +21,7 @@ import (
 // Create it with NewScheduler, run it with Start, and always pair Start with
 // Stop — the workers hold a context the scheduler owns.
 type Scheduler struct {
-	feedSvc        *FeedService
+	syncer         feedSyncer
 	models         data.Models
 	logger         *jsonlog.Logger
 	interval       time.Duration
@@ -33,6 +33,14 @@ type Scheduler struct {
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 	domainLimiters sync.Map
+}
+
+// feedSyncer runs feed syncs; *FeedService is the real one. The scheduler only
+// decides when and how many at once: what makes a feed due and what a sync
+// records belong to the feed sync.
+type feedSyncer interface {
+	ClaimDueFeeds(ctx context.Context, n int, interval time.Duration) ([]*data.Feed, error)
+	SyncFeed(ctx context.Context, feed *data.Feed) SyncResult
 }
 
 // DefaultSyncInterval is used when no valid interval is configured. A
@@ -64,14 +72,16 @@ func cancelledByShutdown(ctx context.Context, err error) bool {
 // NewScheduler builds a scheduler without starting it. A non-positive interval
 // is replaced by DefaultSyncInterval rather than rejected, since the alternative
 // is a ticker that panics at Start.
-func NewScheduler(feedSvc *FeedService, models data.Models, logger *jsonlog.Logger, cfg SchedulerConfig) *Scheduler {
+//
+// models serves only the housekeeping sweeps; feed syncs go through syncer.
+func NewScheduler(syncer feedSyncer, models data.Models, logger *jsonlog.Logger, cfg SchedulerConfig) *Scheduler {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultSyncInterval
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		feedSvc:   feedSvc,
+		syncer:    syncer,
 		models:    models,
 		logger:    logger,
 		interval:  cfg.Interval,
@@ -198,12 +208,14 @@ func (s *Scheduler) Stop() {
 // locks from going stale before a worker reaches them.
 //
 // The loop ends because every processed feed leaves the due set: success and
-// failure both stamp last_fetched_at.
+// failure both stamp last_fetched_at. The exceptions are a feed a new
+// subscriber marked due mid-sync, which should be synced again, and a shutdown,
+// which ends the loop anyway.
 func (s *Scheduler) syncFeeds() {
 	ctx := s.ctx
 
 	for ctx.Err() == nil {
-		feeds, err := s.models.Feeds.GetFeedsToSync(ctx, s.batchSize, s.interval)
+		feeds, err := s.syncer.ClaimDueFeeds(ctx, s.batchSize, s.interval)
 		if err != nil {
 			s.logBackgroundError(err, "scheduler")
 			return
@@ -217,17 +229,19 @@ func (s *Scheduler) syncFeeds() {
 			"count": strconv.Itoa(len(feeds)),
 		})
 
-		feedsChan := make(chan *feedSyncJob, len(feeds))
+		feedsChan := make(chan *data.Feed, len(feeds))
 		for _, f := range feeds {
-			feedsChan <- &feedSyncJob{feed: f}
+			feedsChan <- f
 		}
 		close(feedsChan)
 
+		// Every claimed feed reaches processFeed, even after a shutdown: SyncFeed
+		// is what gives the claim back.
 		var workerWg sync.WaitGroup
 		for range s.workers {
 			workerWg.Go(func() {
-				for job := range feedsChan {
-					s.processFeed(ctx, job)
+				for feed := range feedsChan {
+					s.processFeed(ctx, feed)
 				}
 			})
 		}
@@ -240,45 +254,38 @@ func (s *Scheduler) syncFeeds() {
 	}
 }
 
-type feedSyncJob struct {
-	feed *data.Feed
-}
+func (s *Scheduler) processFeed(ctx context.Context, feed *data.Feed) {
+	// A wait cut short by the shutdown still goes on to SyncFeed, which sees the
+	// cancelled context and gives the claim back.
+	_ = s.getOrCreateLimiter(extractDomain(feed.Url)).Wait(ctx)
 
-func (s *Scheduler) processFeed(ctx context.Context, job *feedSyncJob) {
-	// A panic inside the import is recovered by ImportArticlesForSubscribers
-	// itself, which turns it into an error and marks the feed failed.
+	res := s.syncer.SyncFeed(ctx, feed)
 
-	domain := extractDomain(job.feed.Url)
-	limiter := s.getOrCreateLimiter(domain)
-	if err := limiter.Wait(ctx); err != nil {
+	props := map[string]string{
+		"feed_id": strconv.FormatInt(feed.ID, 10),
+		"url":     feed.Url,
+		"status":  string(res.Status),
+	}
+	if res.NewArticles > 0 {
+		props["new_articles"] = strconv.Itoa(res.NewArticles)
+	}
+	if res.FailedItems > 0 {
+		props["failed_items"] = strconv.Itoa(res.FailedItems)
+	}
+	if res.Status == SyncFailed || res.Status == SyncDeactivated {
+		props["failures"] = strconv.Itoa(res.Failures)
+	}
+	if res.Err != nil {
+		props["reason"] = res.Err.Error()
+	}
+
+	// A feed the far end would not serve is not this program failing; only a
+	// write of ours that did not happen is.
+	if res.StoreErr != nil {
+		s.logger.PrintError(res.StoreErr, props)
 		return
 	}
-
-	err := s.feedSvc.ImportArticlesForSubscribers(ctx, job.feed)
-	if err != nil {
-		if cancelledByShutdown(ctx, err) {
-			s.logger.PrintInfo("feed sync cancelled at shutdown", map[string]string{
-				"feed_id": strconv.FormatInt(job.feed.ID, 10),
-			})
-			return
-		}
-
-		var fetchErr *FeedFetchError
-		if errors.As(err, &fetchErr) {
-			s.logger.PrintInfo("feed sync failed", map[string]string{
-				"feed_id":  strconv.FormatInt(job.feed.ID, 10),
-				"url":      job.feed.Url,
-				"reason":   fetchErr.Error(),
-				"failures": strconv.Itoa(fetchErr.Failures),
-			})
-			return
-		}
-
-		s.logger.PrintError(err, map[string]string{
-			"feed_id": strconv.FormatInt(job.feed.ID, 10),
-			"url":     job.feed.Url,
-		})
-	}
+	s.logger.PrintInfo("feed sync finished", props)
 }
 
 func (s *Scheduler) getOrCreateLimiter(domain string) *rate.Limiter {
