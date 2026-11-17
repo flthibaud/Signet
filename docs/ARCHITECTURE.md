@@ -651,7 +651,7 @@ temps.
 
 **Le 304 qui vide la bibliothèque.** S'abonner à un flux que l'instance connaît
 déjà envoie un `If-None-Match` avec l'ETag stocké. Le serveur répond `304`,
-`ImportArticlesForSubscribers` retourne avant la boucle qui crée les `links`, et
+`SyncFeed` retourne avant la boucle qui crée les `links`, et
 le nouvel abonné n'a **aucun article** — jusqu'à ce que l'éditeur publie. D'où
 `Feeds.MarkDueForSync`, qui remet `last_fetched_at` à l'époque et vide
 `http_etag` / `http_last_modified` pour forcer un `200`. `Subscribe` l'appelle

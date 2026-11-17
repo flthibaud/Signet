@@ -15,7 +15,7 @@ import (
 //
 // The unexported-from-JSON fields are sync bookkeeping the API never returns:
 // HttpEtag and HttpLastModified drive conditional requests, FetchingSince is
-// the scheduler's claim on the feed (see SyncLockWindow), and
+// the scheduler's claim on the feed (see GetFeedsToSync), and
 // ConsecutiveFailures tracks how long it has been failing.
 type Feed struct {
 	ID            int64     `json:"id"`
@@ -87,7 +87,7 @@ func (m FeedModel) Insert(ctx context.Context, feed *Feed) error {
 // their conditional-request headers.
 //
 // Every new subscription goes through it. A feed the instance already knows
-// needs both halves: ImportArticlesForSubscribers returns on a 304 before
+// needs both halves: SyncFeed returns on a 304 before
 // creating any links, so keeping the ETag would leave the new subscriber with
 // an empty library until the feed happened to publish something. Clearing the
 // headers forces a 200 and a full re-read. A feed just created needs the first
@@ -174,29 +174,14 @@ func (m FeedModel) GetByURL(ctx context.Context, url string) (*Feed, error) {
 	return &feed, nil
 }
 
-// SyncLockWindow is how long a claimed feed (fetching_since) stays reserved
-// before another worker may consider the lock stale and reclaim it. It must
-// stay above service.feedProcessTimeout so a slow-but-alive sync is never
-// picked up twice.
-const SyncLockWindow = 10 * time.Minute
-
-// syncIntervalSlack shrinks the refresh interval when testing eligibility.
-// last_fetched_at is stamped when a sync *finishes*, i.e. slightly after the
-// tick that started it, so an exact comparison would always push a feed to the
-// tick after the next one and halve the effective refresh rate.
-const syncIntervalSlack = 0.9
-
-// deadFeedRetryInterval is how often a feed MarkFeedFailed switched off is
-// tried again. Deactivation slows a failing feed down rather than ending it: a
-// site down for an afternoon would otherwise be dropped for every subscriber,
-// with nothing to bring it back.
-const deadFeedRetryInterval = 24 * time.Hour
-
 // GetFeedsToSync atomically claims a batch of feeds ready for synchronization.
-// A feed is due once refreshInterval has elapsed since its last successful
-// fetch, or, once deactivated, deadFeedRetryInterval since its last attempt.
-// Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
-func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInterval time.Duration) ([]*Feed, error) {
+// A feed is due once dueAfter has elapsed since its last attempt, or, once
+// deactivated, deadRetry since then. A claim older than lockWindow is presumed
+// dead and taken over. Uses FOR UPDATE SKIP LOCKED to prevent thundering herd.
+//
+// The durations are the feed sync's rules, owned by internal/service; this
+// query only applies them.
+func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, dueAfter, lockWindow, deadRetry time.Duration) ([]*Feed, error) {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NOW()
@@ -214,9 +199,9 @@ func (m FeedModel) GetFeedsToSync(ctx context.Context, batchSize int, refreshInt
 
 	rows, err := m.DB.QueryContext(ctx, query,
 		batchSize,
-		SyncLockWindow.Seconds(),
-		refreshInterval.Seconds()*syncIntervalSlack,
-		deadFeedRetryInterval.Seconds(),
+		lockWindow.Seconds(),
+		dueAfter.Seconds(),
+		deadRetry.Seconds(),
 	)
 	if err != nil {
 		return nil, err
@@ -259,31 +244,40 @@ func (m FeedModel) ReleaseFeed(ctx context.Context, feedID int64, etag, lastModi
 	return err
 }
 
-// MarkFeedFailed increments the failure counter and deactivates the feed after
-// 10 consecutive failures.
+// MarkFeedFailed increments the failure counter and deactivates the feed once it
+// reaches threshold consecutive failures.
 //
 // A failure stamps last_fetched_at like a success does, so the column means
 // "last attempt". That is what keeps the scheduler, which drains every due feed
 // in one pass, from claiming a feed that just failed again within that pass, and
-// what spaces a deactivated feed's retries deadFeedRetryInterval apart.
+// what spaces a deactivated feed's retries apart.
 //
 // Like ReleaseFeed, it leaves a feed whose claim MarkDueForSync reset alone, and
 // reports zero failures for it: that feed is due for a fresh sync, so this
 // failure says nothing about it.
-func (m FeedModel) MarkFeedFailed(ctx context.Context, feedID int64) (int, error) {
+func (m FeedModel) MarkFeedFailed(ctx context.Context, feedID int64, threshold int) (int, error) {
 	query := `
 		UPDATE feeds
 		SET fetching_since = NULL,
 		    consecutive_failures = consecutive_failures + 1,
-		    is_active = CASE WHEN consecutive_failures + 1 >= 10 THEN FALSE ELSE is_active END,
+		    is_active = CASE WHEN consecutive_failures + 1 >= $2 THEN FALSE ELSE is_active END,
 		    last_fetched_at = NOW()
 		WHERE id = $1 AND fetching_since IS NOT NULL
 		RETURNING consecutive_failures`
 
 	var failures int
-	err := m.DB.QueryRowContext(ctx, query, feedID).Scan(&failures)
+	err := m.DB.QueryRowContext(ctx, query, feedID, threshold).Scan(&failures)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	return failures, err
+}
+
+// Unclaim gives a claim back without recording an attempt, for a sync the
+// shutdown cut short: the feed did nothing wrong, so it keeps its failure count
+// and stays due, and the next start can sync it at once instead of waiting for
+// the claim to go stale.
+func (m FeedModel) Unclaim(ctx context.Context, feedID int64) error {
+	_, err := m.DB.ExecContext(ctx, `UPDATE feeds SET fetching_since = NULL WHERE id = $1`, feedID)
+	return err
 }

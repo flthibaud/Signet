@@ -45,7 +45,7 @@ L'objectif est de mettre en place un système qui :
 │                                    │              │       │
 │              ┌─────────────────────▼──────────┐   │       │
 │              │         FeedService            │   │       │
-│              │  ImportArticlesForSubscribers() │   │       │
+│              │  ClaimDueFeeds() / SyncFeed()  │   │       │
 │              └────────────────┬───────────────┘   │       │
 │                               │                   │       │
 │                    ┌──────────▼──────────┐        │       │
@@ -106,45 +106,42 @@ RETURNING id, url, http_etag, http_last_modified;
 **Notes :**
 - `last_fetched_at` n'est **pas** mis à jour ici, mais à la fin de la tentative, qu'elle réussisse (`ReleaseFeed`) ou échoue (`MarkFeedFailed`) : c'est la date de la dernière tentative. Sans l'écriture en cas d'échec, `syncFeeds`, qui enchaîne les lots, reprendrait aussitôt un feed qui vient d'échouer.
 - `ReleaseFeed` et `MarkFeedFailed` n'écrivent que si le claim tient encore (`fetching_since IS NOT NULL`). `MarkDueForSync` l'efface quand quelqu'un s'abonne pendant une synchro : celle-ci a lu la liste des abonnés avant lui, et écrire son ETag par-dessus la remise à zéro ferait du passage suivant un `304`, laissant le nouvel abonné sans articles.
-- `$2` est la fenêtre de lock (`data.SyncLockWindow`, 10 min, constante) : `fetching_since` remplace le booléen `is_fetching`, donc si un worker crash le lock expire automatiquement et le feed redevient éligible au prochain tick. Elle doit rester au-dessus de `feedProcessTimeout` (8 min).
+- Les durées sont les règles de la synchro et vivent dans `internal/service/feedsync.go` ; la requête les reçoit en paramètres, `ClaimDueFeeds` est le seul appelant.
+- `$2` est la fenêtre de lock (`syncLockWindow`, 10 min) : `fetching_since` remplace le booléen `is_fetching`, donc si un worker crash le lock expire automatiquement et le feed redevient éligible au prochain tick. Elle vaut `feedProcessTimeout` (8 min) + 2 min, donc une synchro lente mais vivante n'est jamais reprise par un autre worker.
 - `$4` est `deadFeedRetryInterval` (24 h) : un feed désactivé reste éligible une fois par jour, compté depuis sa dernière tentative (`MarkFeedFailed` écrit `last_fetched_at` à chaque échec).
 - `$3` est l'intervalle de rafraîchissement, dérivé de `SCHEDULER_INTERVAL` — c'est le même paramètre qui pilote le ticker, sinon régler `SCHEDULER_INTERVAL` n'aurait aucun effet sur la fréquence réelle. On applique une marge de 10 % (`syncIntervalSlack`) parce que `last_fetched_at` est écrit à la *fin* du sync, quelques secondes après le tick qui l'a lancé : sans cette marge, un feed raterait systématiquement le tick suivant et ne serait rafraîchi qu'un tick sur deux.
 
-#### 4. Distribution aux abonnés (`internal/service/fetcher.go`)
+#### 4. La synchro d'un feed (`internal/service/feedsync.go`)
 
-Nouvelle méthode `ImportArticlesForSubscribers()` optimisée :
+`FeedService` expose deux méthodes au scheduler, et rien d'autre : `ClaimDueFeeds` (réserver les feeds dus selon les règles de la synchro) et `SyncFeed` (synchroniser un feed réservé). Toutes les règles — seuil de désactivation, timeout, fenêtre de lock, marge, relance des feeds morts — sont des constantes de `feedsync.go`, passées en paramètres aux requêtes : aucune n'est écrite deux fois.
 
-La logique d'extraction d'articles (readability, hash, métadonnées) doit être factorisée dans une méthode privée commune avec `ImportArticles()` existante, pour éviter la duplication de code.
+`SyncFeed` rend un `SyncResult` (`Status` : `not_modified | synced | failed | deactivated | cancelled`, plus `NewArticles`, `FailedItems`, `Failures`, `Err`, `StoreErr`) et rend **toujours** le claim, quelle que soit l'issue :
 
 ```text
-Pour chaque feed à synchroniser :
-  1. Fetch le flux RSS en envoyant les headers conditionnels :
-     - If-None-Match: [http_etag]
-     - If-Modified-Since: [http_last_modified]
-  2. Si le serveur répond HTTP 304 (Not Modified) :
-     a. Mettre fetching_since = NULL, last_fetched_at = NOW(),
-        consecutive_failures = 0, loguer le succès, et passer au feed suivant.
-  3. Si erreur (timeout, 4xx, 5xx) :
-     a. Incrémenter consecutive_failures, mettre last_fetched_at = NOW().
-     b. Si consecutive_failures >= 10, mettre is_active = FALSE et loguer un warning
-        (le feed n'est plus retenté qu'une fois par jour).
-     c. Mettre fetching_since = NULL (libérer le lock).
-  4. Si HTTP 200 (nouveau contenu) :
-     a. Parser le flux, sauvegarder les nouveaux etag/last-modified.
-     b. Pour chaque item du flux, vérifier si l'article existe (par hash). Si non, créer l'article.
-        (Réutiliser la logique privée commune : readability, hash, métadonnées.)
-     c. Récupérer la liste des IDs de TOUS les abonnés du feed.
-     d. Effectuer un BULK INSERT pour créer les liens abonnés-articles en une seule requête SQL
-        (INSERT INTO links ... ON CONFLICT DO NOTHING) plutôt qu'une requête par abonné.
-  5. Mettre à jour : fetching_since = NULL, last_fetched_at = NOW(),
-     consecutive_failures = 0 en BDD.
+SyncFeed(feed réservé) :
+  1. Contexte déjà annulé (arrêt) → Unclaim, cancelled.
+  2. Fetch avec If-None-Match / If-Modified-Since, sous feedProcessTimeout (8 min).
+  3. 304 → ReleaseFeed avec les en-têtes stockés, not_modified.
+  4. Erreur (transport, non-200, parse) → MarkFeedFailed(seuil) : failed, ou
+     deactivated au seuil. Si c'est l'arrêt qui a coupé : Unclaim, cancelled,
+     aucun échec compté.
+  5. 200 → pour chaque item : dédup par hash, création de l'article si nouveau
+     (readability, repli sur la description du flux), BULK INSERT des links pour
+     tous les abonnés. Un item en échec est logué et compté dans FailedItems.
+  6. ReleaseFeed : nouveaux en-têtes de cache (un en-tête absent garde l'ancien),
+     sauf si un item a échoué — on garde alors les anciens pour que la synchro
+     suivante relise tout et retente l'item.
 ```
+
+Une panique (le parseur readability sur du HTML hostile) est rattrapée par `SyncFeed` et enregistrée comme un échec. Le scheduler écrit une ligne `feed sync finished` par résultat, en INFO ; seul `StoreErr` — une écriture de notre côté qui n'a pas eu lieu — sort en ERROR.
+
+**Arrêt de l'application.** Un fetch coupé par l'arrêt ne compte pas comme un échec du feed, et `Unclaim` rend le claim sans toucher `last_fetched_at` ni le compteur : au redémarrage, le feed est repris tout de suite au lieu d'attendre l'expiration du lock. Les feeds d'un lot réservé passent tous par `SyncFeed`, même après l'arrêt, puisque c'est lui qui rend le claim.
 
 ### Distribution des feeds aux workers
 
 Les feeds récupérés par `GetFeedsToSync` (jusqu'à `SCHEDULER_BATCH_SIZE`) sont envoyés dans un channel buffered. Les `SCHEDULER_WORKERS` goroutines consomment ce channel en parallèle. Chaque worker traite un feed à la fois jusqu'à ce que le channel soit vide.
 
-Un tick ne s'arrête pas au premier lot : `syncFeeds` réclame un nouveau lot tant que le précédent était plein, si bien que tous les feeds dus passent à chaque intervalle quel que soit leur nombre. Le lot ne sert plus qu'à borner le nombre de feeds verrouillés en même temps, pour que leur lock n'expire pas avant qu'un worker les atteigne. La boucle termine parce qu'un feed traité sort des feeds dus : succès comme échec écrivent `last_fetched_at`.
+Un tick ne s'arrête pas au premier lot : `syncFeeds` réclame un nouveau lot tant que le précédent était plein, si bien que tous les feeds dus passent à chaque intervalle quel que soit leur nombre. Le lot ne sert plus qu'à borner le nombre de feeds verrouillés en même temps, pour que leur lock n'expire pas avant qu'un worker les atteigne. La boucle termine parce qu'un feed traité sort des feeds dus : succès comme échec écrivent `last_fetched_at`. Seules exceptions : un feed remis dû par un nouvel abonnement pendant sa synchro, qu'on veut justement reprendre, et l'arrêt, qui stoppe la boucle de toute façon.
 
 ```go
 feedsChan := make(chan Feed, len(feeds))
