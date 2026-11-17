@@ -83,5 +83,5 @@ func (m ArticleModel) Insert(ctx context.Context, article *Article) error {
 		time.Now(),
 	).Scan(&article.ID)
 
-	return err
+	return asUnstorable(err)
 }

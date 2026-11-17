@@ -74,7 +74,6 @@ type FeedService struct {
 	subscribers subscriberStore
 	client      *http.Client
 	parser      *gofeed.Parser
-	readability *readabilitymd.Readability
 	logger      *jsonlog.Logger
 	fetchCfg    FetchConfig
 
@@ -133,7 +132,6 @@ func NewFeedService(models data.Models, logger *jsonlog.Logger, cfg FetchConfig)
 		subscribers:  models.Subscriptions,
 		client:       client,
 		parser:       gofeed.NewParser(),
-		readability:  readabilitymd.NewReadability(),
 		logger:       logger,
 		fetchCfg:     cfg,
 		scrape:       scrape,
@@ -251,7 +249,22 @@ func plainText(s string) string {
 	return strings.TrimSpace(html.UnescapeString(stripped))
 }
 
-// createArticleFromItem builds an article from a feed item.
+// createArticleFromItem scrapes the page behind a feed item and stores the
+// article built from it (see buildArticle).
+func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, link, hash, language string) (*data.Article, error) {
+	page, fetchErr := s.fetchWithReadability(ctx, link)
+
+	article := buildArticle(item, page, fetchErr, link, hash, language)
+	if err := s.articles.Insert(ctx, article); err != nil {
+		return nil, err
+	}
+
+	return article, nil
+}
+
+// buildArticle is the one rule that turns a feed item, and the page readability
+// extracted for it, into an article. page and fetchErr are what
+// fetchWithReadability returned.
 //
 // link is the URL settled on for the item (see itemURL) and hash its
 // deduplication key. The link is stored as it came: normalization exists only
@@ -260,50 +273,56 @@ func plainText(s string) string {
 //
 // language is an already-resolved PostgreSQL text search configuration, not a
 // raw language tag — it is interpolated into the insert as a regconfig.
-func (s *FeedService) createArticleFromItem(ctx context.Context, item *gofeed.Item, link, hash, language string) (*data.Article, error) {
-	parsed, err := s.fetchWithReadability(ctx, link)
-
-	var title, originalHTML, textContent string
-
-	// Anti-bot interstitials no longer reach this point: fetchWithReadability
-	// detects them on the response itself and returns an error, so an empty
-	// title here just means readability found nothing usable.
-	if err != nil || parsed.Title() == "" {
-		title = cleanArticleString(item.Title)
-		originalHTML = cleanArticleString(item.Content)
-		// Plain RSS 2.0 fills only Description (<content:encoded> lands in
-		// Content), so a description-only item would otherwise be stored empty.
-		if originalHTML == "" {
-			originalHTML = cleanArticleString(item.Description)
-		}
-		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
-	} else {
-		title = cleanArticleString(parsed.Title())
-		originalHTML = cleanArticleString(renderToValidUTF8(parsed.RenderHTML))
-		textContent, _ = s.readability.HTMLToMarkdown(originalHTML)
+//
+// Every string taken from the item or the page goes through cleanArticleString:
+// one the database refuses would make the item unstorable for good.
+func buildArticle(item *gofeed.Item, page readability.Article, fetchErr error, link, hash, language string) *data.Article {
+	// Anti-bot interstitials never reach this point: fetchWithReadability
+	// detects them on the response and returns an error.
+	var pageTitle, pageHTML string
+	if fetchErr == nil {
+		pageTitle = page.Title()
+		pageHTML = renderToValidUTF8(page.RenderHTML)
 	}
 
-	article := &data.Article{
-		Url:          link,
+	// The page and the item are taken field by field: a page without a <title>
+	// still has the best body available.
+	title := cleanArticleString(pageTitle)
+	if title == "" {
+		title = cleanArticleString(item.Title)
+	}
+	originalHTML := cleanArticleString(pageHTML)
+	if originalHTML == "" {
+		originalHTML = cleanArticleString(item.Content)
+	}
+	// Plain RSS 2.0 fills only Description (<content:encoded> lands in Content),
+	// so a description-only item would otherwise be stored empty.
+	if originalHTML == "" {
+		originalHTML = cleanArticleString(item.Description)
+	}
+
+	// A body the Markdown converter chokes on is still worth reading and
+	// searching, so it is kept as plain text rather than dropped.
+	textContent, err := readabilitymd.NewReadability().HTMLToMarkdown(originalHTML)
+	if err != nil {
+		textContent = plainText(originalHTML)
+	}
+	textContent = cleanArticleString(textContent)
+
+	return &data.Article{
+		Url:          cleanArticleString(link),
 		Hash:         hash,
 		Title:        title,
 		Description:  cleanArticleString(plainText(item.Description)),
 		Author:       cleanArticleString(getAuthor(item)),
-		ImageURL:     getItemImageURL(item),
+		ImageURL:     cleanArticleString(getItemImageURL(item)),
 		PageType:     "article",
 		ReadingTime:  estimateReadingTime(textContent),
 		OriginalHTML: originalHTML,
-		TextContent:  cleanArticleString(textContent),
+		TextContent:  textContent,
 		Language:     language,
 		PublishedAt:  getPublishedDate(item),
 	}
-
-	err = s.articles.Insert(ctx, article)
-	if err != nil {
-		return nil, err
-	}
-
-	return article, nil
 }
 
 // estimateReadingTime returns an estimated reading time in minutes from the

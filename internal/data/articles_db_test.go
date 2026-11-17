@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // The reading time is the fetcher's to compute; the database must store what it
@@ -77,5 +78,40 @@ func TestArticleIDByHash(t *testing.T) {
 
 	if _, err := m.IDByHash(ctx, "test-"+uuid.NewString()); !errors.Is(err, ErrRecordNotFound) {
 		t.Errorf("unknown hash: err = %v, want ErrRecordNotFound", err)
+	}
+}
+
+// The feed sync tells an item the database will always refuse from one that may
+// go through next time, and only lets the first one advance the feed's ETag.
+func TestArticleInsertReportsUnstorableData(t *testing.T) {
+	db := testDB(t)
+	m := ArticleModel{DB: db}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(a *Article)
+	}{
+		{"check constraint (class 23)", func(a *Article) { a.ReadingTime = 501 }},
+		{"NUL byte in a text column (class 22)", func(a *Article) { a.Title = "bad \x00 title" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			article := &Article{
+				Url:         "https://example.test/" + uuid.NewString(),
+				Hash:        "test-" + uuid.NewString(),
+				Title:       "Test article",
+				Language:    SimpleTextSearchConfig,
+				PublishedAt: time.Now(),
+			}
+			tc.mutate(article)
+
+			err := m.Insert(context.Background(), article)
+			if !errors.Is(err, ErrUnstorable) {
+				t.Fatalf("err = %v, want it to wrap ErrUnstorable", err)
+			}
+			var pqErr *pq.Error
+			if !errors.As(err, &pqErr) {
+				t.Errorf("err = %v, want the driver's error still reachable", err)
+			}
+		})
 	}
 }

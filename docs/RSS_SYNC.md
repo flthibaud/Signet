@@ -115,7 +115,7 @@ RETURNING id, url, http_etag, http_last_modified;
 
 `FeedService` expose deux méthodes au scheduler, et rien d'autre : `ClaimDueFeeds` (réserver les feeds dus selon les règles de la synchro) et `SyncFeed` (synchroniser un feed réservé). Toutes les règles — seuil de désactivation, timeout, fenêtre de lock, marge, relance des feeds morts — sont des constantes de `feedsync.go`, passées en paramètres aux requêtes : aucune n'est écrite deux fois.
 
-`SyncFeed` rend un `SyncResult` (`Status` : `not_modified | synced | failed | deactivated | cancelled`, plus `NewArticles`, `FailedItems`, `Failures`, `Err`, `StoreErr`) et rend **toujours** le claim, quelle que soit l'issue :
+`SyncFeed` rend un `SyncResult` (`Status` : `not_modified | synced | failed | deactivated | cancelled`, plus `NewArticles`, `FailedItems`, `UnstorableItems`, `Failures`, `Err`, `StoreErr`) et rend **toujours** le claim, quelle que soit l'issue :
 
 ```text
 SyncFeed(feed réservé) :
@@ -127,11 +127,19 @@ SyncFeed(feed réservé) :
      aucun échec compté.
   5. 200 → pour chaque item : dédup par hash, création de l'article si nouveau
      (readability, repli sur la description du flux), BULK INSERT des links pour
-     tous les abonnés. Un item en échec est logué et compté dans FailedItems.
+     tous les abonnés. Un item en échec est logué ("feed item failed", avec
+     permanent=true|false) et compté dans FailedItems, ou dans UnstorableItems
+     si la base l'a refusé pour son contenu.
   6. ReleaseFeed : nouveaux en-têtes de cache (un en-tête absent garde l'ancien),
-     sauf si un item a échoué — on garde alors les anciens pour que la synchro
-     suivante relise tout et retente l'item.
+     sauf si un item est dans FailedItems — on garde alors les anciens pour que
+     la synchro suivante relise tout et retente l'item.
 ```
+
+**Échec transitoire ou permanent.** Garder l'ETag fait relire tout le flux, et rescraper chaque item sans article, à chaque synchro. C'est le bon choix pour un timeout ou une base injoignable un instant, mais pas pour un item que la base refusera à chaque fois : l'ETag n'avancerait plus jamais. `internal/data` enveloppe donc dans `data.ErrUnstorable` les refus PostgreSQL des classes SQLSTATE 22 (donnée invalide) et 23 (contrainte violée), sur `Articles.Insert` et `Links.BulkInsertForArticle`, et `SyncFeed` les compte à part, sans retenir l'ETag. Exception : la clé étrangère (`23503`) reste transitoire, car elle vient d'un utilisateur ou d'un feed supprimé pendant la synchro, que la suivante ne verra plus. L'item refusé est retenté seulement quand le flux change.
+
+**Construction de l'article.** `buildArticle` (`fetcher.go`) est la seule règle qui passe d'un item à un article, sans réseau ni base : le titre et le corps de la page extraite par readability, chacun remplacé par celui de l'item s'il est vide (`Content`, puis `Description`), et un corps que la conversion Markdown rejette gardé en texte brut. Chaque chaîne passe par `cleanArticleString` (octets NUL et UTF-8 invalide, que PostgreSQL refuse).
+
+**Collision de slug.** Le slug d'un link est `hash[:12]`, unique par utilisateur. `BulkInsertForArticle` utilise un `ON CONFLICT DO NOTHING` sans cible, qui couvre `(user_id, article_id)` et `(user_id, slug)` : l'utilisateur qui détient déjà un autre article au même préfixe n'a pas celui-ci, au lieu que l'insert échoue pour tous les abonnés.
 
 Une panique (le parseur readability sur du HTML hostile) est rattrapée par `SyncFeed` et enregistrée comme un échec. Le scheduler écrit une ligne `feed sync finished` par résultat, en INFO ; seul `StoreErr` — une écriture de notre côté qui n'a pas eu lieu — sort en ERROR.
 

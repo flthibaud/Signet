@@ -284,11 +284,11 @@ func TestSyncFeedHoldsHeadersBackOnFailedItem(t *testing.T) {
 		return rss(base+"/known", base+"/broken")
 	})
 	f.articles.byHash[hashURL(srv.URL+"/known")] = 7
-	f.articles.insertErr[srv.URL+"/broken"] = errors.New("violates unique constraint")
+	f.articles.insertErr[srv.URL+"/broken"] = errors.New("connection reset by peer")
 
 	res := s.SyncFeed(context.Background(), &data.Feed{ID: 1, Url: srv.URL + "/feed.xml", HttpEtag: `"old"`})
 
-	if res.Status != SyncSynced || res.FailedItems != 1 {
+	if res.Status != SyncSynced || res.FailedItems != 1 || res.UnstorableItems != 0 {
 		t.Fatalf("got %+v, want synced with one failed item", res)
 	}
 	if len(f.feeds.released) != 1 || f.feeds.released[0].etag != `"old"` {
@@ -297,8 +297,37 @@ func TestSyncFeedHoldsHeadersBackOnFailedItem(t *testing.T) {
 	if len(f.links.articles) != 1 || f.links.articles[0] != 7 {
 		t.Errorf("link inserts = %v, want the healthy item linked", f.links.articles)
 	}
-	if out := f.logged.String(); !strings.Contains(out, "feed item failed") || !strings.Contains(out, srv.URL+"/broken") {
+	out := f.logged.String()
+	if !strings.Contains(out, "feed item failed") || !strings.Contains(out, srv.URL+"/broken") {
 		t.Errorf("the failed item was not logged, got: %s", out)
+	}
+	if !strings.Contains(out, `"permanent":"false"`) {
+		t.Errorf("the failure was not logged as transient, got: %s", out)
+	}
+}
+
+// An item the database refuses for its content is refused again on every
+// retry, so it must not hold the headers back: that would re-download and
+// re-scrape the whole feed every sync for as long as the item stays in it.
+func TestSyncFeedAdvancesHeadersPastUnstorableItem(t *testing.T) {
+	s, f := newSyncTestService(t)
+	srv, _ := feedServer(t, map[string]string{"ETag": `"new"`}, func(base string) string {
+		return rss(base+"/known", base+"/unstorable")
+	})
+	f.articles.byHash[hashURL(srv.URL+"/known")] = 7
+	f.articles.insertErr[srv.URL+"/unstorable"] = fmt.Errorf("%w: check constraint", data.ErrUnstorable)
+
+	res := s.SyncFeed(context.Background(), &data.Feed{ID: 1, Url: srv.URL + "/feed.xml", HttpEtag: `"old"`})
+
+	if res.Status != SyncSynced || res.FailedItems != 0 || res.UnstorableItems != 1 {
+		t.Fatalf("got %+v, want synced with one unstorable item and no failed one", res)
+	}
+	if len(f.feeds.released) != 1 || f.feeds.released[0].etag != `"new"` {
+		t.Errorf("released = %v, want the new ETag", f.feeds.released)
+	}
+	out := f.logged.String()
+	if !strings.Contains(out, srv.URL+"/unstorable") || !strings.Contains(out, `"permanent":"true"`) {
+		t.Errorf("the unstorable item was not logged as permanent, got: %s", out)
 	}
 }
 

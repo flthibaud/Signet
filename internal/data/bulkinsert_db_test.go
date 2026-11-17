@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -64,5 +65,60 @@ func TestBulkInsertForArticleNoUsers(t *testing.T) {
 
 	if err := model.BulkInsertForArticle(context.Background(), nil, 1, 1, "slug"); err != nil {
 		t.Errorf("BulkInsertForArticle with no users: %v", err)
+	}
+}
+
+// Two articles whose hashes share their first 12 characters get the same slug.
+// The user who already holds the first one must not make the insert fail for
+// every other subscriber.
+func TestBulkInsertForArticleSlugCollision(t *testing.T) {
+	db := testDB(t)
+	model := LinkModel{DB: db}
+	ctx := context.Background()
+
+	feedID := seedFeed(t, db, "Slug collision feed", "")
+	held := seedArticle(t, db, articleFixture{title: "Already held"})
+	incoming := seedArticle(t, db, articleFixture{title: "Same slug"})
+
+	colliding := seedUser(t, db)
+	other := seedUser(t, db)
+	slug := seedLink(t, db, colliding, held, linkFixture{feedID: &feedID})
+
+	if err := model.BulkInsertForArticle(ctx, []uuid.UUID{colliding, other}, incoming, feedID, slug); err != nil {
+		t.Fatalf("BulkInsertForArticle: %v", err)
+	}
+
+	for _, tc := range []struct {
+		user uuid.UUID
+		want bool
+	}{{other, true}, {colliding, false}} {
+		var exists bool
+		err := db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM links WHERE user_id = $1 AND article_id = $2)`,
+			tc.user, incoming).Scan(&exists)
+		if err != nil {
+			t.Fatalf("link lookup for %s: %v", tc.user, err)
+		}
+		if exists != tc.want {
+			t.Errorf("user %s has a link to the new article: %v, want %v", tc.user, exists, tc.want)
+		}
+	}
+}
+
+// A subscriber deleted while the sync ran breaks a foreign key, which the next
+// sync will not hit again, so it must not be reported as unstorable.
+func TestBulkInsertForArticleMissingUserIsNotUnstorable(t *testing.T) {
+	db := testDB(t)
+	model := LinkModel{DB: db}
+
+	feedID := seedFeed(t, db, "Deleted subscriber feed", "")
+	articleID := seedArticle(t, db, articleFixture{title: "Deleted subscriber article"})
+
+	err := model.BulkInsertForArticle(context.Background(), []uuid.UUID{uuid.New()}, articleID, feedID, "deleted-user-slug")
+	if err == nil {
+		t.Fatal("BulkInsertForArticle for a missing user succeeded, want a foreign key error")
+	}
+	if errors.Is(err, ErrUnstorable) {
+		t.Errorf("err = %v, want it not to wrap ErrUnstorable", err)
 	}
 }
