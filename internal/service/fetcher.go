@@ -21,7 +21,6 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"
-	"golang.org/x/time/rate"
 )
 
 // Errors a caller can act on when resolving a feed URL. ErrInvalidFeed means
@@ -343,7 +342,7 @@ func (s *FeedService) fetchWithReadability(ctx context.Context, articleURL strin
 
 	// Rate limited per domain, so scraping several new articles from one feed
 	// does not hammer the site they came from.
-	if err := s.scrapeLimiter(baseURL.Host).Wait(ctx); err != nil {
+	if err := domainLimiter(&s.scrapeLimiters, baseURL.Host).Wait(ctx); err != nil {
 		return readability.Article{}, err
 	}
 
@@ -354,17 +353,6 @@ func (s *FeedService) fetchWithReadability(ctx context.Context, articleURL strin
 
 	// Parse avec readability
 	return readability.FromReader(bytes.NewReader(page.Body), page.URL)
-}
-
-// scrapeLimiter returns the per-domain rate limiter for readability fetches,
-// creating it (1 req/s) on first use.
-func (s *FeedService) scrapeLimiter(domain string) *rate.Limiter {
-	if v, ok := s.scrapeLimiters.Load(domain); ok {
-		return v.(*rate.Limiter)
-	}
-	limiter := rate.NewLimiter(rate.Every(time.Second), 1)
-	actual, _ := s.scrapeLimiters.LoadOrStore(domain, limiter)
-	return actual.(*rate.Limiter)
 }
 
 func getFeedImageURL(feed *gofeed.Feed) string {
